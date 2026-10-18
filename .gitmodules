@@ -1,0 +1,3 @@
+[submodule "aifs-mps"]
+	path = aifs-mps
+	url = https://github.com/amarchakitus/AIFS-MPS.git
