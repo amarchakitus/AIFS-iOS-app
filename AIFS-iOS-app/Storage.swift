@@ -20,6 +20,11 @@ nonisolated enum AppPaths {
         // Out of iCloud backups: the model and initial conditions download again, and a
         // forecast reruns from them -- and between them they run to gigabytes.
         for url in [bundle, initialConditions, forecasts] { excludeFromBackup(url) }
+        // A model download stopped part-way leaves its staging folder; once a model is in
+        // place (copied in, or finished another time) the leftovers are dead weight.
+        if bundleIsPresent {
+            try? FileManager.default.removeItem(at: documents.appending(path: "aifs-single-v2.partial"))
+        }
         // Documents/coreml only ever holds models copied in for `--ane-probe`; reclaim it on
         // any other launch. (The forecast's own Core ML models live in the bundle.)
         if !ProcessInfo.processInfo.arguments.contains("--ane-probe") {

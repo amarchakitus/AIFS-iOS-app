@@ -193,8 +193,12 @@ final class AppModel {
         // A step peaks at ~3.1 GB of model memory plus the Core ML processor; the weights
         // themselves (~0.6 GB) are already counted once loaded. Refuse up front rather
         // than have iOS end the app part-way through a step.
-        let free = Double(os_proc_available_memory()) / 1e9
         let need = engine.isModelLoaded ? 3.0 : 3.8
+        // On a Mac (the iPad app running there) there is no per-app memory cap and
+        // os_proc_available_memory() means nothing; the machine's own memory is the limit.
+        let free = ProcessInfo.processInfo.isiOSAppOnMac
+            ? Double(ProcessInfo.processInfo.physicalMemory) / 1e9 / 2
+            : Double(os_proc_available_memory()) / 1e9
         guard free >= need else {
             errorMessage = String(
                 format: "Not enough memory for a forecast: %.1f GB is free for the app and a step needs about %.1f GB. "
@@ -316,7 +320,8 @@ final class AppModel {
             refresh()
             forecastRevision += 1
         }
-        r.availableMemoryGB = Double(os_proc_available_memory()) / 1e9
+        // Meaningless for the iPad app on a Mac (see startForecast): don't show it there.
+        r.availableMemoryGB = ProcessInfo.processInfo.isiOSAppOnMac ? nil : Double(os_proc_available_memory()) / 1e9
         run = r
     }
 
