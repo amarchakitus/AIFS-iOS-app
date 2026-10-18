@@ -31,15 +31,21 @@ nonisolated struct BundleIndex: Codable, Sendable {
 nonisolated enum ModelDownloader {
     static var staging: URL { AppPaths.documents.appending(path: "aifs-single-v2.partial", directoryHint: .isDirectory) }
 
-    static func index() async throws -> BundleIndex {
-        let (data, response) = try await URLSession.shared.data(from: ModelSource.url("files.json"))
-        try check(response)
-        return try JSONDecoder().decode(BundleIndex.self, from: data)
+    /// The published bundle into the app's Documents. `progress(bytesDone, bytesTotal)`.
+    static func download(progress: @escaping @Sendable (Int64, Int64) -> Void) async throws {
+        try await download(from: ModelSource.url, staging: staging, into: AppPaths.bundle, progress: progress)
     }
 
-    /// `progress(bytesDone, bytesTotal)` as it goes.
-    static func download(progress: @escaping @Sendable (Int64, Int64) -> Void) async throws {
-        let index = try await index()
+    /// The bundle whose files `source(path)` locates, staged in `staging` and moved to
+    /// `bundle` once every file is verified. (Separate from the app's paths for tests,
+    /// which serve a bundle from `file://` URLs.)
+    static func download(
+        from source: @escaping @Sendable (String) -> URL, staging: URL, into bundle: URL,
+        progress: @escaping @Sendable (Int64, Int64) -> Void
+    ) async throws {
+        let (data, response) = try await URLSession.shared.data(from: source("files.json"))
+        try check(response)
+        let index = try JSONDecoder().decode(BundleIndex.self, from: data)
         let total = index.totalBytes
         let fm = FileManager.default
 
@@ -68,7 +74,7 @@ nonisolated enum ModelDownloader {
             let part = final.appendingPathExtension("download")
             try fm.createDirectory(at: final.deletingLastPathComponent(), withIntermediateDirectories: true)
             let base = have
-            try await fetch(ModelSource.url(file.path), to: part) { progress(base + $0, total) }
+            try await fetch(source(file.path), to: part) { progress(base + $0, total) }
             guard try sha256(of: part) == file.sha256 else {
                 try? fm.removeItem(at: part)
                 throw CocoaError(.fileReadCorruptFile, userInfo: [
@@ -81,9 +87,9 @@ nonisolated enum ModelDownloader {
             progress(have, total)
         }
 
-        try? fm.removeItem(at: AppPaths.bundle)
-        try fm.moveItem(at: staging, to: AppPaths.bundle)
-        AppPaths.excludeFromBackup(AppPaths.bundle)
+        try? fm.removeItem(at: bundle)
+        try fm.moveItem(at: staging, to: bundle)
+        AppPaths.excludeFromBackup(bundle)
     }
 
     /// One file, with byte progress. Cancelling the calling task cancels the transfer.
@@ -115,6 +121,7 @@ nonisolated enum ModelDownloader {
     }
 
     private static func check(_ response: URLResponse?) throws {
+        if let response, !(response is HTTPURLResponse) { return }  // file://: no status to check
         guard let http = response as? HTTPURLResponse, (200 ..< 300).contains(http.statusCode) else {
             let code = (response as? HTTPURLResponse)?.statusCode ?? -1
             throw URLError(.badServerResponse, userInfo: [NSLocalizedDescriptionKey: "The model server answered HTTP \(code)."])
