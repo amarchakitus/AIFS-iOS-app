@@ -149,8 +149,9 @@ nonisolated struct PointForecast: Sendable {
         steps.min { abs($0.date.timeIntervalSince(now)) < abs($1.date.timeIntervalSince(now)) }
     }
 
-    /// Calendar days in the place's own time zone. A step's temperature belongs to the
-    /// day it is valid in; its 6-hour precipitation to the day its window ends in.
+    /// Calendar days in the place's own time zone. Each step belongs to the day its 6-hour
+    /// window ends in, so one valid at exactly local midnight closes the day before -- its
+    /// temperature and its precipitation both.
     var days: [PointDay] {
         var cal = Calendar(identifier: .gregorian)
         cal.timeZone = location.timeZone
