@@ -47,6 +47,9 @@ public struct DisplayField: Identifiable, Hashable, Sendable {
             id: "t850", title: "850 hPa temperature", units: "°C", sources: ["t_850"],
             scale: .diverging(low: -30, mid: 0, high: 30), compute: kelvinToC),
         DisplayField(
+            id: "wind850", title: "850 hPa wind speed", units: "m/s", sources: ["u_850", "v_850"],
+            scale: .sequential(low: 0, high: 50, gamma: 1), compute: speed),
+        DisplayField(
             id: "wind250", title: "250 hPa wind speed", units: "m/s", sources: ["u_250", "v_250"],
             scale: .sequential(low: 0, high: 90, gamma: 1), compute: speed),
         DisplayField(
@@ -115,7 +118,7 @@ public enum ColorScale: Hashable, Sendable {
 
 /// 256 RGBA entries interpolated in OKLab between stops.
 public struct ColorLUT: Sendable {
-    let rgba: [UInt32]  // bytes R, G, B, A in memory (little-endian words)
+    public let rgba: [UInt32]  // bytes R, G, B, A in memory (little-endian words)
 
     public init(stops: [UInt32], count: Int = 256) {
         let labs = stops.map(OKLab.init(hex:))
@@ -225,11 +228,21 @@ public final class MapRenderer: Sendable {
         return out
     }
 
-    public func render(field: DisplayField, sources: [[Float]], coastline: [Bool]?) -> RenderedMap? {
+    /// `field` in display units on the 0.25-degree grid, columns starting at 180W.
+    public func displayValues(field: DisplayField, sources: [[Float]]) -> [Float] {
         let n = sources[0].count
         var display = [Float](repeating: 0, count: n)
         for i in 0 ..< n { display[i] = field.compute(sources, i) }
-        let values = shiftToDateline(grid.regrid(display))
+        return shiftToDateline(grid.regrid(display))
+    }
+
+    /// Land fraction on the 0.25-degree grid, columns starting at 180W (globe coastlines).
+    public func landFraction(lsm: [Float]) -> [Float] {
+        shiftToDateline(grid.regrid(lsm))
+    }
+
+    public func render(field: DisplayField, sources: [[Float]], coastline: [Bool]?) -> RenderedMap? {
+        let values = displayValues(field: field, sources: sources)
         let lut = field.scale.lut
         let coast: UInt32 = 0xFF19_1918  // near-black ink, RGBA little-endian
         let missing: UInt32 = 0xFFD8_D8D6

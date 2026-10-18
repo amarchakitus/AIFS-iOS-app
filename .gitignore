@@ -19,9 +19,12 @@ forecasts/
 
 .DS_Store
 .vscode/
+logs/
+local/
 
 # On-device exports (bundles, ICs) produced by `./aifs export`
 exports/
+dd*/
 
 # Swift / Xcode
 .build/

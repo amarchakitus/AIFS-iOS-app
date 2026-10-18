@@ -291,13 +291,17 @@ nonisolated final class Engine: @unchecked Sendable {
         if let v = arg("--attn-block") { model.attentionBlock = v }
         if let v = arg("--enc-chunks") { model.encoderChunks = v }
         if let v = arg("--dec-chunks") { model.decoderChunks = v }
-        let stored = DisplayField.storedOutputs
+        // What the viewers draw, plus snowfall for the dashboard's conditions.
+        let stored = Array(Set(DisplayField.storedOutputs + ["sf"])).sorted()
 
         // The initial condition's fields (~420 MB) are only needed to build the first input
         // window; scoping them here frees them before the rollout starts.
-        let (startedForecast, initDate, lsm): (Forecast, Date, [Float]?) = try {
+        let (startedForecast, initDate, statics): (Forecast, Date, [String: [Float]]) = try {
             let ic = try InitialCondition.load(from: icURL)
-            return (try Forecast(model: model, initialCondition: ic), ic.date, ic.latest("lsm"))
+            // Land-sea mask (coastlines) and surface geopotential (globe relief).
+            var statics: [String: [Float]] = [:]
+            for name in ["lsm", "z"] { statics[name] = ic.latest(name) }
+            return (try Forecast(model: model, initialCondition: ic), ic.date, statics)
         }()
         let dir = StoredForecast.directory(for: initDate)
         try? FileManager.default.removeItem(at: dir)
@@ -308,8 +312,8 @@ nonisolated final class Engine: @unchecked Sendable {
                 initDate: initDate, stepHours: model.manifest.timestepHours, plannedSteps: steps,
                 completedSteps: 0, fields: stored, secondsPerStep: [], peakMemoryBytes: 0,
                 model: model.manifest.description, finished: false))
-        if let lsm {
-            try FieldFile.write(["lsm": lsm], to: record.staticURL)
+        if !statics.isEmpty {
+            try FieldFile.write(statics, to: record.staticURL)
         }
         try record.save()
         report(.started(dir))

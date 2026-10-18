@@ -6,6 +6,8 @@ struct ContentView: View {
     @State private var leadHours = 48
     @State private var typingLeadTime = false
     @State private var leadTimeText = ""
+    /// Debug: `--open-app-settings` opens the settings sheet.
+    @State private var showSettings = ProcessInfo.processInfo.arguments.contains("--open-app-settings")
     // Model steps are 6 h. The slider covers whole days up to 15; a typed value can be any
     // number of steps, with no upper limit.
     @Environment(\.horizontalSizeClass) private var sizeClass
@@ -20,9 +22,24 @@ struct ContentView: View {
             }
             .navigationTitle("AIFS")
             .refreshable { app.refresh() }
+            .toolbar {
+                ToolbarItem {
+                    Button {
+                        showSettings = true
+                    } label: {
+                        Image(systemName: "gearshape")
+                    }
+                    .accessibilityLabel("Settings")
+                }
+            }
+            .sheet(isPresented: $showSettings) {
+                AppSettingsView(units: UnitStore.shared)
+            }
         } detail: {
             if let forecast = app.selectedForecast {
-                ForecastViewer(forecast: forecast, revision: app.forecastRevision)
+                ForecastViewer(
+                    forecast: forecast, revision: app.forecastRevision,
+                    isGenerating: app.run != nil && app.startedForecastID == forecast.id)
             } else {
                 ContentUnavailableView(
                     "No forecast selected", systemImage: "globe.europe.africa",
@@ -37,6 +54,10 @@ struct ContentView: View {
         .onAppear {
             if selectedIC == nil { selectedIC = app.initialConditions.first?.url }
             app.autorunIfRequested()
+            // Debug: `--open-latest` opens the newest forecast (screenshots, simulator).
+            if ProcessInfo.processInfo.arguments.contains("--open-latest") {
+                app.selectedForecastID = app.forecasts.first?.id
+            }
         }
         .onChange(of: app.downloadedICID) { _, id in
             if let id { selectedIC = id }
