@@ -48,16 +48,21 @@ public final class OpenDataClient: @unchecked Sendable {
         self.mirrors = mirrors
         self.session = session
         self.maxConcurrent = maxConcurrent
-        let (arrays, metadata) = try loadArraysAndMetadata(url: bundle.appending(path: "opendata.safetensors"))
-        guard let rows = metadata["rows"].flatMap(Int.init), let cols = metadata["cols"].flatMap(Int.init) else {
-            throw AIFSError.invalidBundle("opendata.safetensors lacks the source grid shape")
+        // Read without MLX: the client also serves the cycle list, which has no business
+        // starting a Metal device (and the simulator cannot).
+        let (data, tensors, metadata) = try SafeTensors.open(bundle.appending(path: "opendata.safetensors"))
+        guard let rows = metadata["rows"].flatMap(Int.init), let cols = metadata["cols"].flatMap(Int.init),
+              let indptr = tensors["indptr"], let indices = tensors["indices"], let weights = tensors["weights"],
+              let seaMask = tensors["sea"]
+        else {
+            throw AIFSError.invalidBundle("opendata.safetensors lacks the operator or the source grid shape")
         }
         regrid = SparseOperator(
-            indptr: arrays["indptr"]!.asArray(Int32.self),
-            indices: arrays["indices"]!.asArray(Int32.self),
-            weights: arrays["weights"]!.asArray(Float.self),
+            indptr: SafeTensors.array(data, indptr, as: Int32.self),
+            indices: SafeTensors.array(data, indices, as: Int32.self),
+            weights: SafeTensors.array(data, weights, as: Float.self),
             cols: rows * cols)
-        sea = arrays["sea"]!.asArray(UInt8.self).map { $0 != 0 }
+        sea = SafeTensors.array(data, seaMask, as: UInt8.self).map { $0 != 0 }
         guard regrid.rows == manifest.numDataNodes, sea.count == manifest.numDataNodes else {
             throw AIFSError.invalidBundle("open-data operator does not match the model grid")
         }
@@ -179,6 +184,23 @@ public final class OpenDataClient: @unchecked Sendable {
             }
         }
         throw URLError(.resourceUnavailable, userInfo: [NSLocalizedDescriptionKey: "No complete open-data cycle in the last \(lookback * 6) hours"])
+    }
+
+    /// Every cycle in the last `lookback` (newest first) that can be built: it and the
+    /// cycle before it are both published on some mirror. ECMWF's own server keeps a few
+    /// days; the cloud mirrors keep longer. Probed in parallel, a few requests per cycle.
+    public func availableDates(now: Date = .now, lookback: Int = 20) async -> [Date] {
+        let cycle = 6 * 3600.0
+        let newest = (now.timeIntervalSince1970 / cycle).rounded(.down) * cycle
+        // One extra, older cycle: the oldest candidate's first input time.
+        let dates = (0 ... lookback).map { Date(timeIntervalSince1970: newest - Double($0) * cycle) }
+        let published = await withTaskGroup(of: (Date, Bool).self) { group in
+            for date in dates { group.addTask { (date, await self.isPublished(date)) } }
+            var found: [Date: Bool] = [:]
+            for await (date, ok) in group { found[date] = ok }
+            return found
+        }
+        return dates.dropLast().filter { published[$0] == true && published[$0.addingTimeInterval(-cycle)] == true }
     }
 
     private func isPublished(_ date: Date) async -> Bool {
