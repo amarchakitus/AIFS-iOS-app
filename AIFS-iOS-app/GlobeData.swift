@@ -18,7 +18,6 @@ final class GlobeLayerData {
 
     /// Steps loaded so far (field and wind arrive together, or wind is unavailable).
     var loaded: Int { max(steps.count, winds.count) }
-    var isComplete: Bool { failed || loaded >= total }
 
     init(field: DisplayField?, wind: WindLevel?, total: Int) {
         self.field = field

@@ -7,11 +7,8 @@ import struct
 
 import numpy as np
 import pytest
-
 import safetensors_io as safetensors
-from export import _flatten_processor_names
-from export import csr_from_sorted_dst
-from export import rename_parameter
+from export import _flatten_processor_names, csr_from_sorted_dst, rename_parameter
 
 
 def test_safetensors_round_trip_keeps_every_tensor_distinct(tmp_path):

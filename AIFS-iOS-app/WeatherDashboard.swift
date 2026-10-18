@@ -74,8 +74,7 @@ struct WeatherDashboard: View {
                 points[location.id] = p
             }
         }
-        // Debug: `--open-place` opens the first place's detail.
-        if ProcessInfo.processInfo.arguments.contains("--open-place"), shown == nil {
+        if LaunchOptions.openPlace, shown == nil {  // development: open a place directly
             shown = store.locations.first
         }
     }

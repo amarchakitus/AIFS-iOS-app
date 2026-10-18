@@ -111,8 +111,9 @@ final class AppModel {
         let engine = engine
         let work = Task.detached(priority: .userInitiated) {
             try await engine.download(date: date) { progress in
-                Task { @MainActor [weak self] in
-                    self?.download = Download(
+                // AppModel lives as long as the app, so holding it here is harmless.
+                Task { @MainActor in
+                    self.download = Download(
                         completed: progress.completed, total: progress.total,
                         megabytes: progress.bytes / 1_000_000, message: progress.message)
                 }
@@ -158,8 +159,8 @@ final class AppModel {
         UIApplication.shared.isIdleTimerDisabled = true  // ~1 GB; don't let the screen lock stall it
         let work = Task.detached(priority: .userInitiated) {
             try await ModelDownloader.download { done, total in
-                Task { @MainActor [weak self] in
-                    if self?.modelDownload != nil { self?.modelDownload = (done, total) }
+                Task { @MainActor in
+                    if self.modelDownload != nil { self.modelDownload = (done, total) }
                 }
             }
         }
@@ -211,7 +212,7 @@ final class AppModel {
         let engine = engine
         let work = Task.detached(priority: .userInitiated) {
             try await engine.forecast(icURL: ic.url, steps: steps) { event in
-                Task { @MainActor [weak self] in self?.handle(event) }
+                Task { @MainActor in self.handle(event) }
             }
         }
         runTask = Task {
@@ -245,49 +246,6 @@ final class AppModel {
     func existingForecast(for ic: ICFile) -> StoredForecast? {
         let dir = StoredForecast.directory(for: ic.date).lastPathComponent
         return forecasts.first { $0.id.lastPathComponent == dir }
-    }
-
-    /// `--autorun-steps N` on launch: run N steps from the newest initial condition. For
-    /// measuring the device from a Mac (`xcrun devicectl device process launch --console`).
-    func autorunIfRequested() {
-        let args = ProcessInfo.processInfo.arguments
-        if args.contains("--ane-probe") {
-            // Every compiled model in Documents/coreml, each a (1, 1024, 1, S) MLP half
-            // (2 matmuls of 1024x4096 per token).
-            Task.detached(priority: .userInitiated) {
-                let dir = AppPaths.documents.appending(path: "coreml")
-                let models = ((try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? [])
-                    .filter { $0.pathExtension == "mlmodelc" }.sorted { $0.path < $1.path }
-                print("[AIFS] ane-probe: \(models.count) models, thermal \(ProcessInfo.processInfo.thermalState.rawValue)")
-                for url in models {
-                    // name_<S>: S tokens per call. mlp_*: an MLP half; dec_*: the decoder's
-                    // dense second half (projection, MLP, output head).
-                    let name = url.deletingPathExtension().lastPathComponent
-                    let s = Double(name.split(separator: "_").last.flatMap { Int($0) } ?? 0)
-                    let mlpMACs: Double = 2 * 1024 * 4096
-                    let decMACs: Double = mlpMACs + 1024 * 1024 + 1024 * 120
-                    let macs = name.hasPrefix("dec") ? decMACs : mlpMACs
-                    for line in await NeuralEngineProbe.report(modelURL: url, flopsPerCall: 2 * s * macs) {
-                        print("[AIFS] ane " + line)
-                    }
-                }
-                print("[AIFS] ane-probe done, thermal \(ProcessInfo.processInfo.thermalState.rawValue)")
-            }
-            return
-        }
-        if args.contains("--bench") {
-            Task.detached(priority: .userInitiated) {
-                print("[AIFS] bench start, thermal \(ProcessInfo.processInfo.thermalState.rawValue)")
-                for line in AIFSBenchmark.report() { print("[AIFS] bench " + line) }
-                print("[AIFS] bench done, thermal \(ProcessInfo.processInfo.thermalState.rawValue)")
-            }
-            return
-        }
-        guard let i = args.firstIndex(of: "--autorun-steps"), i + 1 < args.count,
-            let steps = Int(args[i + 1]), let ic = initialConditions.first
-        else { return }
-        print("[AIFS] autorun: \(steps) steps from \(ic.date.utcLabel), \(Double(os_proc_available_memory()) / 1e9) GB available")
-        startForecast(from: ic, leadHours: steps * 6)
     }
 
     private func handle(_ event: Engine.Event) {
@@ -361,7 +319,7 @@ nonisolated final class Engine: @unchecked Sendable {
         // fp16, as the checkpoint autocasts; processor on the Neural Engine when the bundle
         // has its Core ML models (`--no-ane` at launch forces the GPU path, for comparison).
         let m = try AIFSModel(
-            bundle: AppPaths.bundle, useNeuralEngine: !ProcessInfo.processInfo.arguments.contains("--no-ane"))
+            bundle: AppPaths.bundle, useNeuralEngine: !LaunchOptions.noNeuralEngine)
         print("[AIFS] model loaded, processor on \(m.usesNeuralEngine ? "Neural Engine" : "GPU")")
         model = m
         return m
@@ -395,15 +353,10 @@ nonisolated final class Engine: @unchecked Sendable {
     func forecast(icURL: URL, steps: Int, report: @escaping @Sendable (Event) -> Void) async throws {
         report(.progress(step: 1, phase: "Loading model", fraction: 0))
         let model = try loadedModel()
-        // Debug tuning from launch arguments (see AppModel.autorunIfRequested); none of
-        // these changes the result, only speed and memory.
-        let args = ProcessInfo.processInfo.arguments
-        func arg(_ name: String) -> Int? {
-            args.firstIndex(of: name).flatMap { $0 + 1 < args.count ? Int(args[$0 + 1]) : nil }
-        }
-        if let v = arg("--attn-block") { model.attentionBlock = v }
-        if let v = arg("--enc-chunks") { model.encoderChunks = v }
-        if let v = arg("--dec-chunks") { model.decoderChunks = v }
+        // Development tuning (Developer/LaunchOptions): speed and memory only.
+        if let v = LaunchOptions.attentionBlock { model.attentionBlock = v }
+        if let v = LaunchOptions.encoderChunks { model.encoderChunks = v }
+        if let v = LaunchOptions.decoderChunks { model.decoderChunks = v }
         // What the viewers draw, plus snowfall for the dashboard's conditions.
         let stored = Array(Set(DisplayField.storedOutputs + ["sf"])).sorted()
 

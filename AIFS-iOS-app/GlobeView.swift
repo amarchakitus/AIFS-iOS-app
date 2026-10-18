@@ -108,8 +108,7 @@ struct GlobeScreen: View {
     /// Per forecast and kept while the app runs, so leaving and reopening a forecast
     /// returns to the same view of the globe and the same time.
     private var state: GlobeState { GlobeStateCache.shared.state(for: forecast.id) }
-    /// Debug: `--open-settings` opens the settings sheet.
-    @State private var showSettings = ProcessInfo.processInfo.arguments.contains("--open-settings")
+    @State private var showSettings = LaunchOptions.openGlobeSettings
     @State private var basemap: GlobeBasemap?
     private var store = GlobeSettingsStore.shared
 

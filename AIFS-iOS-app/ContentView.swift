@@ -6,12 +6,10 @@ struct ContentView: View {
     @State private var leadHours = 48
     @State private var typingLeadTime = false
     @State private var leadTimeText = ""
-    /// Debug: `--open-earlier-cycles` opens the earlier-cycles sheet.
-    @State private var showEarlierCycles = ProcessInfo.processInfo.arguments.contains("--open-earlier-cycles")
+    @State private var showEarlierCycles = LaunchOptions.openEarlierCycles
     /// A run that would replace an existing forecast, waiting for confirmation.
     @State private var confirmReplace: (ic: ICFile, existing: StoredForecast)?
-    /// Debug: `--open-app-settings` opens the settings sheet.
-    @State private var showSettings = ProcessInfo.processInfo.arguments.contains("--open-app-settings")
+    @State private var showSettings = LaunchOptions.openAppSettings
     // Model steps are 6 h. The slider covers whole days up to 15; a typed value can be any
     // number of steps, with no upper limit.
     @Environment(\.horizontalSizeClass) private var sizeClass
@@ -64,15 +62,10 @@ struct ContentView: View {
         }
         .onAppear {
             if selectedIC == nil { selectedIC = app.initialConditions.first?.url }
+            // Development options (Developer/LaunchOptions); all off in normal use.
             app.autorunIfRequested()
-            // Debug: `--download-model` starts the model download (first-launch testing).
-            if ProcessInfo.processInfo.arguments.contains("--download-model"), app.modelState == .missing {
-                app.downloadModel()
-            }
-            // Debug: `--open-latest` opens the newest forecast (screenshots, simulator).
-            if ProcessInfo.processInfo.arguments.contains("--open-latest") {
-                app.selectedForecastID = app.forecasts.first?.id
-            }
+            if LaunchOptions.downloadModel, app.modelState == .missing { app.downloadModel() }
+            if LaunchOptions.openLatest { app.selectedForecastID = app.forecasts.first?.id }
         }
         .onChange(of: app.downloadedICID) { _, id in
             if let id { selectedIC = id }

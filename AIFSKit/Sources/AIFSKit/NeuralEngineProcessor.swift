@@ -1,4 +1,6 @@
-import CoreML
+// Core ML's arrays and models aren't Sendable, but the pipeline below hands each one
+// between its threads explicitly (one owner at a time), so its captures are deliberate.
+@preconcurrency import CoreML
 import Foundation
 import MLX
 

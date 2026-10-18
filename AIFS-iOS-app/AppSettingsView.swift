@@ -4,8 +4,7 @@ import SwiftUI
 struct AppSettingsView: View {
     @Bindable var units: UnitStore
     @Environment(\.dismiss) private var dismiss
-    /// Debug: `--open-attribution` opens the licences page (with `--open-app-settings`).
-    @State private var showAttribution = ProcessInfo.processInfo.arguments.contains("--open-attribution")
+    @State private var showAttribution = LaunchOptions.openAttribution
 
     var body: some View {
         NavigationStack {

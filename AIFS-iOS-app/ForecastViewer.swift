@@ -46,11 +46,9 @@ struct ForecastViewer: View {
         .navigationTitle("Init \(forecast.meta.initDate.utcLabel)")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
-            // Debug: `--viewer-mode globe|places|map` picks the starting tab.
-            let args = ProcessInfo.processInfo.arguments
-            if let i = args.firstIndex(of: "--viewer-mode"), i + 1 < args.count,
-               let m = Mode.allCases.first(where: { $0.rawValue.lowercased() == args[i + 1] }) {
-                mode = m
+            if let name = LaunchOptions.viewerMode,
+               let m = Mode.allCases.first(where: { $0.rawValue.lowercased() == name }) {
+                mode = m  // development: open on a given tab
             }
         }
     }
@@ -292,21 +290,6 @@ nonisolated final class RendererCache: @unchecked Sendable {
         let r = try MapRenderer(bundle: AppPaths.bundle)
         cached = r
         return r
-    }
-
-    private var lands: [URL: [Float]] = [:]
-
-    /// Land fraction on the 0.25-degree grid (globe coastlines), cached per forecast.
-    func land(for forecast: StoredForecast, renderer: MapRenderer) -> [Float]? {
-        lock.lock()
-        if let l = lands[forecast.id] { lock.unlock(); return l }
-        lock.unlock()
-        guard let lsm = try? FieldFile.read(forecast.staticURL)["lsm"] else { return nil }
-        let l = renderer.landFraction(lsm: lsm)
-        lock.lock()
-        lands[forecast.id] = l
-        lock.unlock()
-        return l
     }
 
     func coastline(for forecast: StoredForecast, renderer: MapRenderer) -> [Bool]? {

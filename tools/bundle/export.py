@@ -34,11 +34,9 @@ import sys
 from pathlib import Path
 
 import numpy as np
-
 import safetensors_io as safetensors  # beside this file; not the PyPI package
 from aifs_mps.models import get_model
-from aifs_mps.paths import input_state_path
-from aifs_mps.paths import weights_dir
+from aifs_mps.paths import input_state_path, weights_dir
 
 LOG = logging.getLogger("aifs.export")
 
@@ -264,9 +262,8 @@ def export_bundle(checkpoint_path: Path, out: Path, dtype: np.dtype) -> Path:
 
     patches.apply_all()
     import torch
-    from anemoi.inference.checkpoint import Checkpoint
-
     from aifs_mps.models import check_runtime
+    from anemoi.inference.checkpoint import Checkpoint
 
     check_runtime(get_model("single"))
 
@@ -305,11 +302,8 @@ def export_bundle(checkpoint_path: Path, out: Path, dtype: np.dtype) -> Path:
     # N320 sea mask it NaNs the land-only fields with. Columns of the operator are the
     # open-data grid *after* the 180-degree longitude roll (0E first), rows 90N first.
     import earthkit.data as ekd
-
     from aifs_mps.paths import lsm_path
-    from aifs_mps.regrid import LATLON_SHAPE
-    from aifs_mps.regrid import latlon_to_n320_matrix
-    from aifs_mps.regrid import n320_to_latlon_matrix
+    from aifs_mps.regrid import LATLON_SHAPE, latlon_to_n320_matrix, n320_to_latlon_matrix
 
     to_n320 = latlon_to_n320_matrix()
     lsm = ekd.from_source("file", str(lsm_path()))[0].to_numpy(flatten=True)

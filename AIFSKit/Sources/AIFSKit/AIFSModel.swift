@@ -398,7 +398,7 @@ public final class AIFSModel: @unchecked Sendable {
     /// Sliding-window transformer over the hidden mesh (without the latent skip): on the
     /// Neural Engine when the bundle has Core ML models for it, otherwise on the GPU.
     func process(_ x0: MLXArray) -> MLXArray {
-        let p = manifest.processor, c = x0.dim(1), d = c / p.heads
+        let p = manifest.processor
         if let ane = neuralEngine, ane.tokens == x0.dim(0) {
             do {
                 // One chunk's attention: queries of chunk i against keys of chunks i-1..i+1,

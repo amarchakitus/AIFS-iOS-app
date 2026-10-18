@@ -27,7 +27,7 @@ nonisolated enum AppPaths {
         }
         // Documents/coreml only ever holds models copied in for `--ane-probe`; reclaim it on
         // any other launch. (The forecast's own Core ML models live in the bundle.)
-        if !ProcessInfo.processInfo.arguments.contains("--ane-probe") {
+        if !LaunchOptions.neuralEngineProbe {
             try? FileManager.default.removeItem(at: documents.appending(path: "coreml"))
         }
     }

@@ -1,0 +1,47 @@
+import AIFSKit
+import Foundation
+import os
+
+/// Development tooling run from launch arguments: the Neural Engine probe, the attention
+/// benchmark, and unattended runs for measuring a device. Kept apart from the app proper.
+extension AppModel {
+    /// The measuring options, on launch (see LaunchOptions). Watch the log from a Mac with
+    /// `xcrun devicectl device process launch --console`.
+    func autorunIfRequested() {
+        if LaunchOptions.neuralEngineProbe {
+            // Every compiled model in Documents/coreml, each a (1, 1024, 1, S) MLP half
+            // (2 matmuls of 1024x4096 per token).
+            Task.detached(priority: .userInitiated) {
+                let dir = AppPaths.documents.appending(path: "coreml")
+                let models = ((try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? [])
+                    .filter { $0.pathExtension == "mlmodelc" }.sorted { $0.path < $1.path }
+                print("[AIFS] ane-probe: \(models.count) models, thermal \(ProcessInfo.processInfo.thermalState.rawValue)")
+                for url in models {
+                    // name_<S>: S tokens per call. mlp_*: an MLP half; dec_*: the decoder's
+                    // dense second half (projection, MLP, output head).
+                    let name = url.deletingPathExtension().lastPathComponent
+                    let s = Double(name.split(separator: "_").last.flatMap { Int($0) } ?? 0)
+                    let mlpMACs: Double = 2 * 1024 * 4096
+                    let decMACs: Double = mlpMACs + 1024 * 1024 + 1024 * 120
+                    let macs = name.hasPrefix("dec") ? decMACs : mlpMACs
+                    for line in await NeuralEngineProbe.report(modelURL: url, flopsPerCall: 2 * s * macs) {
+                        print("[AIFS] ane " + line)
+                    }
+                }
+                print("[AIFS] ane-probe done, thermal \(ProcessInfo.processInfo.thermalState.rawValue)")
+            }
+            return
+        }
+        if LaunchOptions.bench {
+            Task.detached(priority: .userInitiated) {
+                print("[AIFS] bench start, thermal \(ProcessInfo.processInfo.thermalState.rawValue)")
+                for line in AIFSBenchmark.report() { print("[AIFS] bench " + line) }
+                print("[AIFS] bench done, thermal \(ProcessInfo.processInfo.thermalState.rawValue)")
+            }
+            return
+        }
+        guard let steps = LaunchOptions.autorunSteps, let ic = initialConditions.first else { return }
+        print("[AIFS] autorun: \(steps) steps from \(ic.date.utcLabel), \(Double(os_proc_available_memory()) / 1e9) GB available")
+        startForecast(from: ic, leadHours: steps * 6)
+    }
+}
