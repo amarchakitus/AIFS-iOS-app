@@ -131,17 +131,25 @@ struct ContentView: View {
                 .disabled(app.modelState == .missing)
             }
             ForEach(app.initialConditions) { ic in
-                HStack {
-                    Image(systemName: selectedIC == ic.url ? "checkmark.circle.fill" : "circle")
-                        .foregroundStyle(selectedIC == ic.url ? Color.accentColor : .secondary)
-                    VStack(alignment: .leading) {
-                        Text(ic.date.utcLabel)
-                        Text(ByteCountFormatter.string(fromByteCount: Int64(ic.bytes), countStyle: .file))
-                            .font(.caption).foregroundStyle(.secondary)
+                Button {
+                    selectedIC = ic.url
+                } label: {
+                    HStack {
+                        Image(systemName: selectedIC == ic.url ? "checkmark.circle.fill" : "circle")
+                            .foregroundStyle(selectedIC == ic.url ? Color.accentColor : .secondary)
+                        VStack(alignment: .leading) {
+                            Text(ic.date.utcLabel).foregroundStyle(.primary)
+                            Text(ByteCountFormatter.string(fromByteCount: Int64(ic.bytes), countStyle: .file))
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer(minLength: 0)
                     }
+                    .contentShape(Rectangle())
                 }
-                .contentShape(Rectangle())
-                .onTapGesture { selectedIC = ic.url }
+                // The list's selection is the open forecast, and both are keyed by file
+                // URL: without this an IC row is "selected" as a forecast that doesn't
+                // exist, and the detail column shows "No forecast selected".
+                .selectionDisabled()
                 .swipeActions { Button("Delete", role: .destructive) { app.delete(ic) } }
             }
         } header: {
