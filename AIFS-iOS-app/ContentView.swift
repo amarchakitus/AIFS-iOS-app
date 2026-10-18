@@ -24,7 +24,7 @@ struct ContentView: View {
                 runSection
                 forecastSection
             }
-            .navigationTitle("AI Forecast Factory")
+            .navigationTitle("AIFS")
             .refreshable { app.refresh() }
             .toolbar {
                 ToolbarItem {

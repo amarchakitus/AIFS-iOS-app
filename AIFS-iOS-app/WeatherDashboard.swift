@@ -99,19 +99,23 @@ private struct LocationCard: View {
                 .font(.title2)
                 .frame(width: 36)
             VStack(alignment: .leading, spacing: 3) {
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                // A line each: name, condition, local time. Sharing lines squeezed and cut
+                // them off beside the range band.
+                HStack(alignment: .firstTextBaseline, spacing: 5) {
                     Text(location.name).font(.headline).lineLimit(1)
                     if location.isCurrentLocation {
                         Image(systemName: "location.fill").font(.caption2).foregroundStyle(.secondary)
                     }
-                    if let now { Text(localTime(now.date)).font(.caption).foregroundStyle(.secondary) }
                 }
                 Text(now?.condition.text ?? "Loading…")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
-                    .minimumScaleFactor(0.85)
+                if let now {
+                    Text(localTime(now.date)).font(.caption).foregroundStyle(.tertiary).monospacedDigit()
+                }
             }
+            .layoutPriority(1)  // the name before the range band
             Spacer(minLength: 8)
             if let point, point.days.count > 1 {
                 let days = point.days
