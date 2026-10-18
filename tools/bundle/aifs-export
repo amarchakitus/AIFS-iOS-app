@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Export AIFS Single v2 for the app, using the aifs-mps submodule's pipeline:
+#
+#   tools/bundle/aifs-export bundle                     -> exports/aifs-single-v2/
+#   tools/bundle/aifs-export ic --date YYYYMMDDTHH      a cached initial state, for the device
+#   tools/bundle/aifs-export test                       the exporter's tests
+#
+# Then `uv run tools/export_coreml.py exports/aifs-single-v2` adds the Core ML
+# processor. Runs in aifs-mps's *single* runtime: loading the checkpoint needs Single v2's
+# anemoi-models (see aifs-mps's README). First time: `git submodule update --init`, then
+# `aifs-mps/aifs setup`.
+set -euo pipefail
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+mps="$here/../../aifs-mps"
+[ -x "$mps/aifs" ] || { echo "aifs-mps is missing: run 'git submodule update --init'" >&2; exit 1; }
+unset VIRTUAL_ENV  # an activated venv would otherwise confuse uv's --project
+
+if [ "${1:-}" = test ]; then
+    shift
+    exec uv run --project "$mps/runtimes/single" pytest -q "$here/test_export.py" "$@"
+fi
+exec uv run --project "$mps/runtimes/single" python "$here/export.py" "$@"

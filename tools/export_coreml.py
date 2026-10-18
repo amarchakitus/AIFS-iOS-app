@@ -23,7 +23,7 @@ and the decoder's dense second half, everything after its graph attention, per g
 Tensors are (1, C, 1, S) fp16, the Neural Engine's channels-first layout, with S tokens
 per call (the 40,320 nodes in 10 chunks). Linear layers are 1x1 convolutions.
 
-    uv run tools/export_coreml.py aifs-mps/exports/aifs-single-v2
+    uv run tools/export_coreml.py exports/aifs-single-v2
 
 writes <bundle>/coreml/*.mlmodelc and records it in <bundle>/coreml/coreml.json.
 """
