@@ -6,6 +6,10 @@ struct ContentView: View {
     @State private var leadHours = 48
     @State private var typingLeadTime = false
     @State private var leadTimeText = ""
+    /// Debug: `--open-earlier-cycles` opens the earlier-cycles sheet.
+    @State private var showEarlierCycles = ProcessInfo.processInfo.arguments.contains("--open-earlier-cycles")
+    /// A run that would replace an existing forecast, waiting for confirmation.
+    @State private var confirmReplace: (ic: ICFile, existing: StoredForecast)?
     /// Debug: `--open-app-settings` opens the settings sheet.
     @State private var showSettings = ProcessInfo.processInfo.arguments.contains("--open-app-settings")
     // Model steps are 6 h. The slider covers whole days up to 15; a typed value can be any
@@ -34,6 +38,13 @@ struct ContentView: View {
             }
             .sheet(isPresented: $showSettings) {
                 AppSettingsView(units: UnitStore.shared)
+            }
+            .sheet(isPresented: $showEarlierCycles) {
+                EarlierCyclesSheet(app: app) { date in
+                    showEarlierCycles = false
+                    app.downloadIC(date: date)
+                }
+                .presentationDetents([.medium, .large])
             }
         } detail: {
             if let forecast = app.selectedForecast {
@@ -97,6 +108,8 @@ struct ContentView: View {
         }
     }
 
+    // Downloaded initial conditions only; fetching more lives in the header's download
+    // menu, so actions and data don't share one list.
     @ViewBuilder private var icSection: some View {
         Section {
             if let d = app.download {
@@ -104,13 +117,16 @@ struct ContentView: View {
                     ProgressView(value: Double(d.completed), total: Double(max(d.total, 1)))
                     Text(d.total > 0 ? "\(d.completed)/\(d.total) fields · \(d.megabytes) MB" : d.message)
                         .font(.caption).foregroundStyle(.secondary)
-                    Button("Cancel", role: .cancel) { app.cancelDownload() }.font(.caption)
+                    Button("Cancel", role: .cancel) { app.cancelDownload() }
+                        .font(.caption)
+                        .buttonStyle(.borderless)
                 }
-            } else {
+            } else if app.initialConditions.isEmpty {
+                // First run: the one thing to do, in plain sight.
                 Button {
-                    app.downloadLatestIC()
+                    app.downloadIC()
                 } label: {
-                    Label("Download latest from ECMWF", systemImage: "icloud.and.arrow.down")
+                    Label("Download the latest cycle", systemImage: "icloud.and.arrow.down")
                 }
                 .disabled(app.modelState == .missing)
             }
@@ -129,7 +145,19 @@ struct ContentView: View {
                 .swipeActions { Button("Delete", role: .destructive) { app.delete(ic) } }
             }
         } header: {
-            Text("Initial conditions")
+            HStack {
+                Text("Initial conditions")
+                Spacer()
+                Menu {
+                    Button("Latest cycle", systemImage: "icloud.and.arrow.down") { app.downloadIC() }
+                    Button("Earlier cycle…", systemImage: "clock.arrow.circlepath") { showEarlierCycles = true }
+                } label: {
+                    Image(systemName: "icloud.and.arrow.down")
+                        .font(.body.weight(.medium))
+                }
+                .disabled(app.modelState == .missing || app.download != nil)
+                .accessibilityLabel("Download initial conditions")
+            }
         }
     }
 
@@ -137,7 +165,11 @@ struct ContentView: View {
         Section("Run") {
             if let r = app.run {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Step \(min(r.step + 1, r.totalSteps)) of \(r.totalSteps) · \(r.phase)")
+                    HStack {
+                        Text("Step \(min(r.step + 1, r.totalSteps)) of \(r.totalSteps)")
+                        Spacer()
+                        NetworkGlyph(phase: r.phase)
+                    }
                     ProgressView(value: r.progress)
                     HStack(spacing: 12) {
                         if let s = r.lastStepSeconds { Text(String(format: "%.0f s/step", s)) }
@@ -146,18 +178,50 @@ struct ContentView: View {
                         thermalLabel
                     }
                     .font(.caption).foregroundStyle(.secondary)
-                    Button("Stop", role: .destructive) { app.cancelForecast() }.font(.caption)
+                    if r.stopping {
+                        HStack(spacing: 6) {
+                            ProgressView().controlSize(.mini)
+                            Text("Stopping after this step…")
+                        }
+                        .font(.caption).foregroundStyle(.secondary)
+                    } else {
+                        // Borderless, so only the button takes the tap, not the whole row.
+                        Button("Stop", role: .destructive) { app.cancelForecast() }
+                            .font(.caption)
+                            .buttonStyle(.borderless)
+                    }
                 }
             } else {
                 leadTimeControl
                 Button {
                     if let ic = app.initialConditions.first(where: { $0.url == selectedIC }) {
-                        app.startForecast(from: ic, leadHours: leadHours)
+                        if let existing = app.existingForecast(for: ic) {
+                            confirmReplace = (ic, existing)
+                        } else {
+                            app.startForecast(from: ic, leadHours: leadHours)
+                        }
                     }
                 } label: {
                     Label("Run forecast", systemImage: "play.fill")
                 }
                 .disabled(app.modelState != .ready || selectedIC == nil)
+                .confirmationDialog(
+                    "Replace the existing forecast?",
+                    isPresented: Binding(get: { confirmReplace != nil }, set: { if !$0 { confirmReplace = nil } }),
+                    titleVisibility: .visible
+                ) {
+                    Button("Replace", role: .destructive) {
+                        if let c = confirmReplace { app.startForecast(from: c.ic, leadHours: leadHours) }
+                        confirmReplace = nil
+                    }
+                    Button("Cancel", role: .cancel) { confirmReplace = nil }
+                } message: {
+                    if let c = confirmReplace {
+                        let hours = c.existing.meta.completedSteps * c.existing.meta.stepHours
+                        Text("There is already a forecast from \(c.ic.date.utcLabel) (+\(hours) h\(c.existing.meta.finished ? "" : ", stopped early")). "
+                            + "Running again deletes it and starts over.")
+                    }
+                }
             }
         }
     }
@@ -257,4 +321,64 @@ struct ContentView: View {
 
 #Preview {
     ContentView()
+}
+
+/// The cycles ECMWF's mirrors can still serve, to download one from the last few days.
+private struct EarlierCyclesSheet: View {
+    let app: AppModel
+    let onPick: (Date) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if let cycles = app.availableCycles, !app.findingCycles {
+                    if cycles.isEmpty {
+                        ContentUnavailableView(
+                            "Nothing found", systemImage: "icloud.slash",
+                            description: Text("No mirror answered for the last five days. Check the connection and try again."))
+                    }
+                    Section {
+                        ForEach(cycles, id: \.self) { date in
+                            let have = app.initialConditions.contains { $0.date == date }
+                            Button {
+                                onPick(date)
+                            } label: {
+                                // Ordinary text ink, not the button tint.
+                                HStack {
+                                    Text(date.utcLabel).foregroundStyle(have ? .secondary : .primary)
+                                    Spacer()
+                                    if have {
+                                        Text("Downloaded").font(.caption).foregroundStyle(.secondary)
+                                    } else {
+                                        Text(age(date)).font(.caption).foregroundStyle(.secondary)
+                                    }
+                                }
+                            }
+                            .disabled(have)
+                            .tint(.primary)
+                        }
+                    } footer: {
+                        if !cycles.isEmpty {
+                            Text("Each is about 420 MB. ECMWF keeps the last few days of cycles; older ones come from the cloud mirrors.")
+                        }
+                    }
+                } else {
+                    ProgressView().frame(maxWidth: .infinity)
+                }
+            }
+            .navigationTitle("Earlier cycles")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+            }
+        }
+        .presentationBackground(Color(.systemGroupedBackground))
+        .onAppear { app.findAvailableCycles() }
+    }
+
+    private func age(_ date: Date) -> String {
+        let hours = Int(Date.now.timeIntervalSince(date) / 3600)
+        return hours < 48 ? "\(hours) h ago" : "\(hours / 24) days ago"
+    }
 }

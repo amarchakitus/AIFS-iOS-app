@@ -29,6 +29,8 @@ final class AppModel {
         var lastStepSeconds: Double?
         var availableMemoryGB: Double?
         var peakMemoryGB: Double?
+        /// Stop was pressed. A step can't be interrupted, so the run ends when this one does.
+        var stopping = false
     }
 
     var modelState: ModelState = .missing
@@ -83,23 +85,44 @@ final class AppModel {
 
     // MARK: - Initial conditions
 
-    func downloadLatestIC() {
+    /// Cycles available to download (nil until looked up), and whether a lookup is running.
+    var availableCycles: [Date]?
+    var findingCycles = false
+
+    func findAvailableCycles() {
+        guard !findingCycles else { return }
+        findingCycles = true
+        let engine = engine
+        Task {
+            availableCycles = (try? await Task.detached { try await engine.availableCycles() }.value) ?? []
+            findingCycles = false
+        }
+    }
+
+    /// Download the latest cycle, or `date` when given (an earlier one).
+    func downloadIC(date: Date? = nil) {
         guard downloadTask == nil else { return }
         download = Download()
         downloadedICID = nil  // so the same cycle twice still re-selects it
         errorMessage = nil
         let engine = engine
+        let work = Task.detached(priority: .userInitiated) {
+            try await engine.download(date: date) { progress in
+                Task { @MainActor [weak self] in
+                    self?.download = Download(
+                        completed: progress.completed, total: progress.total,
+                        megabytes: progress.bytes / 1_000_000, message: progress.message)
+                }
+            }
+        }
         downloadTask = Task {
             do {
-                let url = try await Task.detached(priority: .userInitiated) {
-                    try await engine.downloadLatest { progress in
-                        Task { @MainActor [weak self] in
-                            self?.download = Download(
-                                completed: progress.completed, total: progress.total,
-                                megabytes: progress.bytes / 1_000_000, message: progress.message)
-                        }
-                    }
-                }.value
+                // Detached work doesn't inherit cancellation; pass Cancel on to it.
+                let url = try await withTaskCancellationHandler {
+                    try await work.value
+                } onCancel: {
+                    work.cancel()
+                }
                 download = nil
                 refresh()
                 // Select what was just fetched (or found already on disk). Match by file name:
@@ -107,6 +130,10 @@ final class AppModel {
                 downloadedICID = initialConditions.first {
                     $0.url.lastPathComponent == url.lastPathComponent
                 }?.id
+            } catch is CancellationError {
+                errorMessage = nil
+            } catch where (error as? URLError)?.code == .cancelled {
+                errorMessage = nil
             } catch {
                 errorMessage = "Download failed: \(error.localizedDescription)"
             }
@@ -132,13 +159,20 @@ final class AppModel {
         run = Run(initDate: ic.date, totalSteps: steps)
         UIApplication.shared.isIdleTimerDisabled = true  // the GPU stops when the screen locks
         let engine = engine
+        let work = Task.detached(priority: .userInitiated) {
+            try await engine.forecast(icURL: ic.url, steps: steps) { event in
+                Task { @MainActor [weak self] in self?.handle(event) }
+            }
+        }
         runTask = Task {
             do {
-                try await Task.detached(priority: .userInitiated) {
-                    try await engine.forecast(icURL: ic.url, steps: steps) { event in
-                        Task { @MainActor [weak self] in self?.handle(event) }
-                    }
-                }.value
+                // A detached task does not inherit cancellation: pass Stop on explicitly,
+                // or the engine never sees it.
+                try await withTaskCancellationHandler {
+                    try await work.value
+                } onCancel: {
+                    work.cancel()
+                }
             } catch is CancellationError {
                 errorMessage = nil
             } catch {
@@ -152,7 +186,16 @@ final class AppModel {
         }
     }
 
-    func cancelForecast() { runTask?.cancel() }
+    func cancelForecast() {
+        run?.stopping = true
+        runTask?.cancel()
+    }
+
+    /// The stored forecast a run from `ic` would replace, if there is one.
+    func existingForecast(for ic: ICFile) -> StoredForecast? {
+        let dir = StoredForecast.directory(for: ic.date).lastPathComponent
+        return forecasts.first { $0.id.lastPathComponent == dir }
+    }
 
     /// `--autorun-steps N` on launch: run N steps from the newest initial condition. For
     /// measuring the device from a Mac (`xcrun devicectl device process launch --console`).
@@ -267,10 +310,23 @@ nonisolated final class Engine: @unchecked Sendable {
         return m
     }
 
-    func downloadLatest(progress: @escaping @Sendable (OpenDataClient.Progress) -> Void) async throws -> URL {
+    private func openDataClient() throws -> OpenDataClient {
         let manifest = try Manifest.load(from: AppPaths.bundle.appending(path: "manifest.json"))
-        let client = try OpenDataClient(bundle: AppPaths.bundle, manifest: manifest)
-        let date = try await client.latestDate()
+        return try OpenDataClient(bundle: AppPaths.bundle, manifest: manifest)
+    }
+
+    /// Cycles the mirrors can still serve, newest first.
+    func availableCycles() async throws -> [Date] {
+        let client = try openDataClient()
+        return await client.availableDates()
+    }
+
+    /// Download and assemble the initial condition for `date`, or the latest cycle.
+    func download(date: Date?, progress: @escaping @Sendable (OpenDataClient.Progress) -> Void) async throws -> URL {
+        let client = try openDataClient()
+        let latest: Date
+        if let date { latest = date } else { latest = try await client.latestDate() }
+        let date = latest
         let url = AppPaths.initialConditions.appending(path: InitialCondition.fileName(for: date))
         if FileManager.default.fileExists(atPath: url.path) { return url }
         let ic = try await client.build(date: date, progress: progress)
@@ -303,6 +359,8 @@ nonisolated final class Engine: @unchecked Sendable {
             for name in ["lsm", "z"] { statics[name] = ic.latest(name) }
             return (try Forecast(model: model, initialCondition: ic), ic.date, statics)
         }()
+        // Stopped while loading: leave any forecast already stored for this date alone.
+        try Task.checkCancellation()
         let dir = StoredForecast.directory(for: initDate)
         try? FileManager.default.removeItem(at: dir)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
