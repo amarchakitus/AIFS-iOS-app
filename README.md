@@ -5,6 +5,17 @@ silicon Mac. The app downloads the latest initial conditions from ECMWF open dat
 computes the forecast on the device's GPU and Neural Engine, and shows the result as a
 map, interactive globes, and forecasts for places you save.
 
+<p align="center">
+  <img src="docs/images/globe.gif" width="400" alt="The globe: 2 m temperature with 10 m wind particles, turning, with day and night shading">
+</p>
+
+<p align="center">
+  <img src="docs/images/home.png" width="200" alt="Forecasts: the model, initial conditions, lead time and runs">
+  <img src="docs/images/map.png" width="200" alt="Map: 2 m temperature with a lead-time slider">
+  <img src="docs/images/places.png" width="200" alt="Places: current conditions and a seven-day range for saved places">
+  <img src="docs/images/place.png" width="200" alt="A place: temperature and dew point, precipitation, and the days ahead">
+</p>
+
 ## Running it
 
 Needs Xcode 27 and a device on iOS/iPadOS 27, or an Apple silicon Mac, with about 4 GB of
