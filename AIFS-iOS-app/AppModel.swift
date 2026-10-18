@@ -51,6 +51,9 @@ final class AppModel {
     var forecastRevision = 0
 
     private let engine = Engine()
+    /// The model bundle downloading: bytes so far and in all.
+    var modelDownload: (done: Int64, total: Int64)?
+    private var modelTask: Task<Void, Never>?
     private var runTask: Task<Void, Never>?
     private var downloadTask: Task<Void, Never>?
 
@@ -144,6 +147,38 @@ final class AppModel {
     }
 
     func cancelDownload() { downloadTask?.cancel() }
+
+    // MARK: - Model bundle
+
+    /// Fetch the model bundle from Hugging Face (resumes where a stopped one left off).
+    func downloadModel() {
+        guard modelTask == nil else { return }
+        errorMessage = nil
+        modelDownload = (0, 0)
+        UIApplication.shared.isIdleTimerDisabled = true  // ~1 GB; don't let the screen lock stall it
+        let work = Task.detached(priority: .userInitiated) {
+            try await ModelDownloader.download { done, total in
+                Task { @MainActor [weak self] in
+                    if self?.modelDownload != nil { self?.modelDownload = (done, total) }
+                }
+            }
+        }
+        modelTask = Task {
+            do {
+                try await withTaskCancellationHandler { try await work.value } onCancel: { work.cancel() }
+            } catch is CancellationError {
+            } catch where (error as? URLError)?.code == .cancelled {
+            } catch {
+                errorMessage = "Model download failed: \(error.localizedDescription)"
+            }
+            modelDownload = nil
+            modelTask = nil
+            UIApplication.shared.isIdleTimerDisabled = false
+            refresh()
+        }
+    }
+
+    func cancelModelDownload() { modelTask?.cancel() }
 
     func delete(_ ic: ICFile) {
         try? FileManager.default.removeItem(at: ic.url)

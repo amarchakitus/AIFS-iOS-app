@@ -65,6 +65,10 @@ struct ContentView: View {
         .onAppear {
             if selectedIC == nil { selectedIC = app.initialConditions.first?.url }
             app.autorunIfRequested()
+            // Debug: `--download-model` starts the model download (first-launch testing).
+            if ProcessInfo.processInfo.arguments.contains("--download-model"), app.modelState == .missing {
+                app.downloadModel()
+            }
             // Debug: `--open-latest` opens the newest forecast (screenshots, simulator).
             if ProcessInfo.processInfo.arguments.contains("--open-latest") {
                 app.selectedForecastID = app.forecasts.first?.id
@@ -91,13 +95,26 @@ struct ContentView: View {
         Section("Model") {
             switch app.modelState {
             case .missing:
-                Label("Model bundle not installed", systemImage: "exclamationmark.triangle")
-                    .foregroundStyle(.orange)
-                Text(
-                    "Run `./aifs export bundle` on a Mac, then copy the **aifs-single-v2** folder into this app's Documents (Finder → iPad → Files → AIFS). Pull to refresh."
-                )
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+                if let d = app.modelDownload {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ProgressView(value: Double(d.done), total: Double(max(d.total, 1)))
+                        Text(d.total > 0 ? "\(d.done / 1_000_000) of \(d.total / 1_000_000) MB" : "Starting…")
+                            .font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                        Button("Cancel", role: .cancel) { app.cancelModelDownload() }
+                            .font(.caption)
+                            .buttonStyle(.borderless)
+                    }
+                } else {
+                    Button {
+                        app.downloadModel()
+                    } label: {
+                        Label("Download the model", systemImage: "arrow.down.circle")
+                    }
+                    Text("AIFS Single v2, about 960 MB from Hugging Face. Wi-Fi recommended; "
+                        + "a stopped download picks up where it left off.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
             case .loading:
                 Label("Loading…", systemImage: "hourglass")
             case .ready:
