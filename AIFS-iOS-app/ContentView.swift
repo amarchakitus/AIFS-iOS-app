@@ -24,7 +24,7 @@ struct ContentView: View {
                 runSection
                 forecastSection
             }
-            .navigationTitle("AIFS")
+            .navigationTitle("AI Forecast Factory")
             .refreshable { app.refresh() }
             .toolbar {
                 ToolbarItem {
@@ -110,7 +110,7 @@ struct ContentView: View {
                     } label: {
                         Label("Download the model", systemImage: "arrow.down.circle")
                     }
-                    Text("AIFS Single v2, about 960 MB from Hugging Face. Wi-Fi recommended; "
+                    Text("AIFS Single v2, about 1 GB from Hugging Face. Wi-Fi recommended; "
                         + "a stopped download picks up where it left off.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)

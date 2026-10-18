@@ -68,6 +68,21 @@ final class GlobeState {
     }
 }
 
+/// One GlobeState per forecast, for as long as the app runs.
+@MainActor
+final class GlobeStateCache {
+    static let shared = GlobeStateCache()
+    private var states: [URL: GlobeState] = [:]
+
+    func state(for forecast: URL) -> GlobeState {
+        if let s = states[forecast] { return s }
+        let s = GlobeState()
+        s.spinning = GlobeSettingsStore.shared.settings.spin  // only when first opened
+        states[forecast] = s
+        return s
+    }
+}
+
 /// The sub-solar point's direction in the shader's earth frame at `date` (NOAA's
 /// low-precision solar position: well under a degree, plenty for a terminator).
 nonisolated func sunDirection(at date: Date) -> SIMD4<Float> {
@@ -90,7 +105,9 @@ nonisolated func sunDirection(at date: Date) -> SIMD4<Float> {
 struct GlobeScreen: View {
     let forecast: StoredForecast
 
-    @State private var state = GlobeState()
+    /// Per forecast and kept while the app runs, so leaving and reopening a forecast
+    /// returns to the same view of the globe and the same time.
+    private var state: GlobeState { GlobeStateCache.shared.state(for: forecast.id) }
     /// Debug: `--open-settings` opens the settings sheet.
     @State private var showSettings = ProcessInfo.processInfo.arguments.contains("--open-settings")
     @State private var basemap: GlobeBasemap?
@@ -161,7 +178,6 @@ struct GlobeScreen: View {
                 .presentationBackgroundInteraction(.enabled(upThrough: .medium))
         }
         .task(id: forecast.id) { basemap = await GlobeDataCache.shared.basemap(for: forecast) }
-        .onAppear { state.spinning = settings.spin }
         .onChange(of: settings.spin) { _, on in state.spinning = on }
     }
 
@@ -199,7 +215,7 @@ struct GlobeScreen: View {
             .disabled(total < 2)
             .accessibilityLabel(state.playing ? "Pause" : "Play")
             if total > 1 {
-                Slider(value: $state.time, in: 1 ... Double(total)) { editing in
+                Slider(value: Binding(get: { state.time }, set: { state.time = $0 }), in: 1 ... Double(total)) { editing in
                     if editing { state.playing = false }
                 }
             } else {
@@ -571,6 +587,8 @@ final class GlobeRenderer: NSObject, MTKViewDelegate {
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {}
 
     func draw(in view: MTKView) {
+        // No GPU work unless in the foreground: iOS refuses it from the background.
+        guard UIApplication.shared.applicationState == .active else { return }
         syncTextures()
         let now = CACurrentMediaTime()
         let dt = min(now - lastFrame, 0.1)

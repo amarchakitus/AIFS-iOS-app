@@ -59,6 +59,8 @@ nonisolated enum ModelDownloader {
             ])
         }
         progress(have, total)
+        try fm.createDirectory(at: staging, withIntermediateDirectories: true)
+        AppPaths.excludeFromBackup(staging)
 
         for file in todo {
             try Task.checkCancellation()
@@ -81,6 +83,7 @@ nonisolated enum ModelDownloader {
 
         try? fm.removeItem(at: AppPaths.bundle)
         try fm.moveItem(at: staging, to: AppPaths.bundle)
+        AppPaths.excludeFromBackup(AppPaths.bundle)
     }
 
     /// One file, with byte progress. Cancelling the calling task cancels the transfer.

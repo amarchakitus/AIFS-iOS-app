@@ -17,11 +17,22 @@ nonisolated enum AppPaths {
         for url in [initialConditions, forecasts] {
             try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         }
+        // Out of iCloud backups: the model and initial conditions download again, and a
+        // forecast reruns from them -- and between them they run to gigabytes.
+        for url in [bundle, initialConditions, forecasts] { excludeFromBackup(url) }
         // Documents/coreml only ever holds models copied in for `--ane-probe`; reclaim it on
         // any other launch. (The forecast's own Core ML models live in the bundle.)
         if !ProcessInfo.processInfo.arguments.contains("--ane-probe") {
             try? FileManager.default.removeItem(at: documents.appending(path: "coreml"))
         }
+    }
+
+    static func excludeFromBackup(_ url: URL) {
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        var url = url
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try? url.setResourceValues(values)
     }
 
     static var bundleIsPresent: Bool {

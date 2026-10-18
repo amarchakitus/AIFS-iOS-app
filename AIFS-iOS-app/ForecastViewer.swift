@@ -14,16 +14,14 @@ struct ForecastViewer: View {
         case map = "Map", globe = "Globe", places = "Places"
         var id: String { rawValue }
     }
-    /// Debug: `--viewer-mode globe|places|map` picks the starting tab.
-    @State private var mode: Mode = {
-        let args = ProcessInfo.processInfo.arguments
-        guard let i = args.firstIndex(of: "--viewer-mode"), i + 1 < args.count else { return .map }
-        return Mode.allCases.first { $0.rawValue.lowercased() == args[i + 1] } ?? .map
-    }()
+    /// The last tab used, kept across forecasts and launches: leaving the globe for the
+    /// list and opening a forecast again comes back to the globe.
+    @AppStorage("viewer.mode") private var mode: Mode = .map
 
     var body: some View {
         VStack(spacing: 0) {
-            Picker("View", selection: $mode) {
+            // Generating shows the map without forgetting the tab you chose.
+            Picker("View", selection: Binding(get: { isGenerating ? .map : mode }, set: { mode = $0 })) {
                 ForEach(Mode.allCases) { m in
                     Text(m.rawValue).tag(m)
                         .selectionDisabled(isGenerating && m != .map)
@@ -47,7 +45,14 @@ struct ForecastViewer: View {
         .background((mode == .places && !isGenerating ? Color(.systemGroupedBackground) : Color(.systemBackground)).ignoresSafeArea())
         .navigationTitle("Init \(forecast.meta.initDate.utcLabel)")
         .navigationBarTitleDisplayMode(.inline)
-        .onChange(of: isGenerating) { _, generating in if generating { mode = .map } }
+        .onAppear {
+            // Debug: `--viewer-mode globe|places|map` picks the starting tab.
+            let args = ProcessInfo.processInfo.arguments
+            if let i = args.firstIndex(of: "--viewer-mode"), i + 1 < args.count,
+               let m = Mode.allCases.first(where: { $0.rawValue.lowercased() == args[i + 1] }) {
+                mode = m
+            }
+        }
     }
 }
 

@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// App-wide settings: units, and the licences and attribution page.
+/// App-wide settings: units, licences and attribution, and the privacy policy.
 struct AppSettingsView: View {
     @Bindable var units: UnitStore
     @Environment(\.dismiss) private var dismiss
@@ -45,6 +45,7 @@ struct AppSettingsView: View {
                         }
                     }
                     .tint(.primary)  // a row that opens a page, not a blue action
+                    NavigationLink("Privacy policy") { PrivacyPolicyView() }
                 }
             }
             .navigationDestination(isPresented: $showAttribution) { AttributionView() }

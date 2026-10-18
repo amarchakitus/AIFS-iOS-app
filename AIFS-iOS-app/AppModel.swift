@@ -190,6 +190,17 @@ final class AppModel {
     func startForecast(from ic: ICFile, leadHours: Int) {
         guard runTask == nil, modelState == .ready || modelState == .loading else { return }
         errorMessage = nil
+        // A step peaks at ~3.1 GB of model memory plus the Core ML processor; the weights
+        // themselves (~0.6 GB) are already counted once loaded. Refuse up front rather
+        // than have iOS end the app part-way through a step.
+        let free = Double(os_proc_available_memory()) / 1e9
+        let need = engine.isModelLoaded ? 3.0 : 3.8
+        guard free >= need else {
+            errorMessage = String(
+                format: "Not enough memory for a forecast: %.1f GB is free for the app and a step needs about %.1f GB. "
+                    + "Close other apps and try again, or use a device with more memory.", free, need)
+            return
+        }
         let steps = leadHours / 6
         run = Run(initDate: ic.date, totalSteps: steps)
         UIApplication.shared.isIdleTimerDisabled = true  // the GPU stops when the screen locks
@@ -328,6 +339,12 @@ nonisolated final class Engine: @unchecked Sendable {
     private let lock = NSLock()
     private var model: AIFSModel?
 
+    var isModelLoaded: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return model != nil
+    }
+
     /// The model stays resident between runs (~540 MB); loading it takes a few seconds.
     func loadedModel() throws -> AIFSModel {
         lock.lock()
@@ -418,8 +435,13 @@ nonisolated final class Engine: @unchecked Sendable {
             AIFSRuntime.clearCache()
         }
         for s in 1 ... steps {
+            RunGate.shared.pass()
             try Task.checkCancellation()
-            model.onProgress = { phase, fraction in report(.progress(step: s, phase: phase, fraction: fraction)) }
+            model.onProgress = { phase, fraction in
+                // Between GPU dispatches: the one place a backgrounded run can safely wait.
+                RunGate.shared.pass()
+                report(.progress(step: s, phase: phase, fraction: fraction))
+            }
             AIFSRuntime.resetPeakMemory()
             let t = ContinuousClock.now
             let output = forecast!.advanceStep()

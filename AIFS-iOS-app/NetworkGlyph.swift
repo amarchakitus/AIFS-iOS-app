@@ -20,19 +20,31 @@ struct NetworkGlyph: View {
         }
     }
 
+    /// Room for the glow. A Canvas clips to its frame, and the glow reaches ~6 pt past
+    /// the outer nodes; the canvas is this much larger all round and pulled back in with
+    /// negative padding, so the glyph's footprint stays 58 x 22.
+    private static let bleed: CGFloat = 7
+
     var body: some View {
         TimelineView(.animation(paused: reduceMotion)) { timeline in
             let t = timeline.date.timeIntervalSinceReferenceDate
             let pulse = reduceMotion ? 1 : 0.7 + 0.3 * (0.5 + 0.5 * sin(t * 4))
-            Canvas { context, size in draw(in: &context, size: size, pulse: pulse) }
+            Canvas { context, size in
+                let b = Self.bleed
+                draw(in: &context, origin: CGPoint(x: b, y: b),
+                     size: CGSize(width: size.width - 2 * b, height: size.height - 2 * b), pulse: pulse)
+            }
         }
-        .frame(width: 58, height: 22)
+        .frame(width: 58 + 2 * Self.bleed, height: 22 + 2 * Self.bleed)
+        .padding(-Self.bleed)
         .accessibilityElement()
         .accessibilityLabel(stage.map { "\($0)".capitalized } ?? "Loading")
     }
 
-    private func draw(in context: inout GraphicsContext, size: CGSize, pulse: Double) {
-        func at(_ x: Double, _ y: Double) -> CGPoint { CGPoint(x: x * size.width, y: y * size.height) }
+    private func draw(in context: inout GraphicsContext, origin: CGPoint, size: CGSize, pulse: Double) {
+        func at(_ x: Double, _ y: Double) -> CGPoint {
+            CGPoint(x: origin.x + x * size.width, y: origin.y + y * size.height)
+        }
         let inputs = [0.18, 0.5, 0.82].map { at(0.06, $0) }
         let mesh = [at(0.37, 0.3), at(0.37, 0.7), at(0.63, 0.3), at(0.63, 0.7)]
         let outputs = [0.18, 0.5, 0.82].map { at(0.94, $0) }
