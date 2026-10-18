@@ -24,4 +24,4 @@ privacy policies.
 **What stays on your device.** Saved places, settings, downloaded data and forecasts are
 kept in the app's own storage and are removed when you delete the app.
 
-**Contact.** [Add a contact email or web page before publishing.]
+**Contact.** Questions about privacy: open an issue at https://github.com/amarchakitus/AIFS-iOS-app/issues.
