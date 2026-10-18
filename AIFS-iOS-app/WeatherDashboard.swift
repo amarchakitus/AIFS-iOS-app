@@ -263,7 +263,7 @@ private struct LocationDetail: View {
                 Text(now?.condition.text ?? " ").font(.title3).foregroundStyle(.secondary)
             }
             Spacer()
-            if let now, let today = point?.days.first {
+            if let now, let point, let today = point.days.first(where: { sameLocalDay($0.id, now.date) }) {
                 VStack(alignment: .trailing, spacing: 4) {
                     Text(formatter("EEE HH:mm").string(from: now.date)).font(.subheadline.weight(.medium))
                     Text("\(WeatherUnits.temperature(today.low)) to \(WeatherUnits.temperature(today.high))")
@@ -315,7 +315,8 @@ private struct LocationDetail: View {
             .chartLegend(.hidden)
             .chartXSelection(value: $selected)
             .chartYScale(domain: .automatic(includesZero: false))
-            .chartXAxis { dayAxis }
+            .chartXAxis { dayAxis(point) }
+            .chartXScale(domain: span(point))
             .chartYAxis {
                 AxisMarks(position: .leading, values: .automatic(desiredCount: 4)) { v in
                     AxisGridLine().foregroundStyle(.quaternary)
@@ -336,19 +337,26 @@ private struct LocationDetail: View {
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
             } else {
-                Chart(point.steps, id: \.date) { s in
+                // Only wet steps: a zero-height bar still draws as a pill.
+                Chart(wet, id: \.date) { s in
                     // Each total is the 6 h ending at its step; the bar spans that window,
-                    // less a sliver so neighbouring bars stay separate.
-                    BarMark(
-                        xStart: .value("From", s.date.addingTimeInterval(-6 * 3600 + 900)),
-                        xEnd: .value("To", s.date.addingTimeInterval(-900)),
-                        y: .value("Amount", WeatherUnits.precipitationValue(s.precipitationMM)))
-                        .foregroundStyle(by: .value("Type", s.isSnow ? "Snow" : "Rain"))
-                        .clipShape(UnevenRoundedRectangle(topLeadingRadius: 2, topTrailingRadius: 2))
+                    // less a sliver so neighbouring bars stay separate. A RectangleMark with
+                    // both ranges: a BarMark given an x range and a bare `y` draws a thin
+                    // horizontal span at that height, not a column from zero.
+                    let from: Date = s.date.addingTimeInterval(-6 * 3600 + 900)
+                    let to: Date = s.date.addingTimeInterval(-900)
+                    let amount: Double = WeatherUnits.precipitationValue(s.precipitationMM)
+                    let kind: String = s.isSnow ? "Snow" : "Rain"
+                    RectangleMark(
+                        xStart: .value("From", from), xEnd: .value("To", to),
+                        yStart: .value("None", 0.0), yEnd: .value("Amount", amount))
+                        .foregroundStyle(by: .value("Type", kind))
+                        .cornerRadius(1.5)
                 }
                 .chartForegroundStyleScale(["Rain": dewPointColor, "Snow": snowColor])
                 .chartLegend(.hidden)
-                .chartXAxis { dayAxis }
+                .chartXAxis { dayAxis(point) }
+            .chartXScale(domain: span(point))
                 .chartYAxis {
                     AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) { v in
                         AxisGridLine().foregroundStyle(.quaternary)
@@ -363,22 +371,43 @@ private struct LocationDetail: View {
         }
     }
 
-    private var dayAxis: some AxisContent {
-        AxisMarks(values: .stride(by: .day)) { _ in
+    /// A gridline at every local midnight; labels only every few days on long runs,
+    /// so a 15-day forecast gets about six instead of sixteen piled together. Spaced
+    /// labels carry the date ("Wed 21"): a weekday alone is ambiguous across weeks.
+    private func dayAxis(_ point: PointForecast) -> some AxisContent {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = location.timeZone
+        var days: [Date] = []
+        if let first = point.steps.first?.date, let last = point.steps.last?.date {
+            var d = cal.startOfDay(for: first)
+            if d < first { d = cal.date(byAdding: .day, value: 1, to: d)! }
+            while d <= last {
+                days.append(d)
+                d = cal.date(byAdding: .day, value: 1, to: d)!
+            }
+        }
+        let every = max(1, Int((Double(days.count) / 6).rounded(.up)))
+        let labelled = Set(days.enumerated().filter { $0.offset % every == 0 }.map(\.element))
+        let format = formatter(every == 1 ? "EEE" : "EEE d")
+        return AxisMarks(values: days) { value in
             AxisGridLine().foregroundStyle(.quaternary)
-            AxisValueLabel(format: .dateTime.weekday(.abbreviated), anchor: .topLeading)
-                .font(.caption)
+            AxisValueLabel(anchor: .topLeading) {
+                let date = value.as(Date.self)
+                Text(date.map { labelled.contains($0) ? format.string(from: $0) : "" } ?? "").font(.caption)
+            }
         }
     }
 
     private func dailyCard(_ point: PointForecast) -> some View {
-        let days = point.days
+        // From today on: the run's first day is often already over by the time it's read.
+        let all = point.days
+        let days = Array(all.drop { day in !isToday(day, point) && all.contains { isToday($0, point) } && day.id < (point.current()?.date ?? .distantPast) })
         return Card(title: "By day", trailing: nil) {
             Grid(horizontalSpacing: 12, verticalSpacing: 0) {
                 ForEach(Array(days.enumerated()), id: \.element.id) { i, day in
                     if i > 0 { Divider().gridCellUnsizedAxes(.horizontal) }
                     GridRow {
-                        Text(i == 0 ? "Today" : formatter("EEEE").string(from: day.id))
+                        Text(isToday(day, point) ? "Today" : formatter("EEEE").string(from: day.id))
                             .gridColumnAlignment(.leading)
                         ConditionIcon(symbol: day.condition.symbol)
                             .frame(width: 28)
@@ -433,6 +462,25 @@ private struct LocationDetail: View {
         let at = String(format: "%.2f°%@ %.2f°%@", abs(lat), lat >= 0 ? "N" : "S", abs(lon), lon >= 0 ? "E" : "W")
         let km = Int(point.gridDistanceKm.rounded())
         return "AIFS Single v2, init \(forecast.meta.initDate.utcLabel)\nModel grid point \(at), \(km) km away"
+    }
+
+    /// The whole run, so both charts share one time axis whatever they plot.
+    private func span(_ point: PointForecast) -> ClosedRange<Date> {
+        let first = point.steps.first?.date ?? .now
+        return first ... max(point.steps.last?.date ?? first, first.addingTimeInterval(3600))
+    }
+
+    private func sameLocalDay(_ a: Date, _ b: Date) -> Bool {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = location.timeZone
+        return cal.isDate(a, inSameDayAs: b)
+    }
+
+    /// "Today" is the day of the step shown as now, not the run's first day, which can
+    /// be yesterday by the time it is read.
+    private func isToday(_ day: PointDay, _ point: PointForecast) -> Bool {
+        guard let now = point.current() else { return false }
+        return sameLocalDay(day.id, now.date)
     }
 
     private func formatter(_ format: String) -> DateFormatter {
