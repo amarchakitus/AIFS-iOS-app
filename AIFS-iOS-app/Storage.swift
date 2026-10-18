@@ -4,7 +4,7 @@ import Foundation
 /// Where everything lives in the app's Documents folder, which Finder and the Files app
 /// can see (UIFileSharingEnabled), so a model bundle can be dropped in from a Mac.
 ///
-///     Documents/aifs-single-v2/        model bundle (`./aifs export bundle`)
+///     Documents/aifs-single-v2/        model bundle (`tools/bundle/aifs-export bundle`, or downloaded)
 ///     Documents/ic/ic_<date>.safetensors     initial conditions (downloaded or exported)
 ///     Documents/forecasts/<init>/      one directory per forecast run
 nonisolated enum AppPaths {

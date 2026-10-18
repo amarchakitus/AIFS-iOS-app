@@ -1,6 +1,6 @@
 import Foundation
 
-/// `manifest.json` of a bundle written by `aifs-mps/aifs_mps/export.py`.
+/// `manifest.json` of a bundle written by `tools/bundle/export.py`.
 ///
 /// Every constant the PyTorch pipeline applies around the network -- variable order,
 /// normalisation, imputation, bounding -- resolved to plain indices and numbers, so this

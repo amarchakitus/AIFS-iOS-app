@@ -2,7 +2,7 @@ import Foundation
 import MLX
 
 /// Initial conditions: the two input times of every field the model reads from the state,
-/// as written by `./aifs export ic` (`ic_<date>.safetensors`).
+/// as written by `tools/bundle/aifs-export ic` (`ic_<date>.safetensors`).
 public struct InitialCondition: @unchecked Sendable {
     /// Valid time of the *latest* input slot; the first is `timestepHours` earlier.
     public let date: Date

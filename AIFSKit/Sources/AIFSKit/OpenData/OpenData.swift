@@ -39,7 +39,7 @@ public final class OpenDataClient: @unchecked Sendable {
     private let regrid: SparseOperator
     private let sea: [Bool]
 
-    /// `bundle` must contain `opendata.safetensors` (see `aifs-mps/aifs_mps/export.py`).
+    /// `bundle` must contain `opendata.safetensors` (see `tools/bundle/export.py`).
     public init(
         bundle: URL, manifest: Manifest, mirrors: [Mirror] = OpenDataClient.defaultMirrors,
         session: URLSession = .shared, maxConcurrent: Int = 6
@@ -351,7 +351,7 @@ struct SparseOperator: Sendable {
 }
 
 extension InitialCondition {
-    /// Write in the format `./aifs export ic` produces, so either source loads the same way.
+    /// Write in the format `tools/bundle/aifs-export ic` produces, so either source loads the same way.
     public func save(to url: URL) throws {
         let f = ISO8601DateFormatter()
         f.formatOptions = [.withInternetDateTime]
