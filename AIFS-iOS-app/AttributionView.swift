@@ -12,6 +12,8 @@ struct AttributionView: View {
                         + "weights are licensed under CC BY 4.0. This app converts them to half precision "
                         + "for MLX and Core ML and runs them on this device.")
                         .font(.subheadline).foregroundStyle(.secondary)
+                    Text("Lang, S. et al. (2024). AIFS – ECMWF's data-driven forecasting system. arXiv:2406.01465.")
+                        .font(.footnote).foregroundStyle(.secondary)
                 }
                 Link("Model card on Hugging Face", destination: URL(string: "https://huggingface.co/ecmwf/aifs-single-2.0")!)
                 Link("CC BY 4.0 licence", destination: URL(string: "https://creativecommons.org/licenses/by/4.0/")!)
@@ -21,16 +23,14 @@ struct AttributionView: View {
                         + "This app converts them to Core ML programs, with 8-bit weights in its Swin blocks, "
                         + "and runs them on this device's Neural Engine.")
                         .font(.subheadline).foregroundStyle(.secondary)
+                        Text("Aurora 1.5 is fine-tuned from Aurora: Bodnar, C. et al. (2025). A foundation model for the Earth system. "
+                            + "Nature. doi:10.1038/s41586-025-09005-y.")
+                        .font(.footnote).foregroundStyle(.secondary)
                 }
                 Link("Aurora 1.5 documentation", destination: URL(string: "https://microsoft.github.io/aurora/models.html#aurora-1-5-0-25")!)
             } header: {
                 Text("Forecast models")
-            } footer: {
-                Text("Lang, S. et al. (2024). AIFS – ECMWF's data-driven forecasting system. arXiv:2406.01465.\n"
-                    + "Aurora 1.5 is fine-tuned from Aurora: Bodnar, C. et al. (2025). A foundation model for the Earth system. "
-                    + "Nature. doi:10.1038/s41586-025-09005-y.")
             }
-
             Section {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("ECMWF open data").font(.headline)
