@@ -22,7 +22,7 @@ struct ContentView: View {
                 runSection
                 forecastSection
             }
-            .navigationTitle("AIFS")
+            .navigationTitle("Local Runs")
             .refreshable { app.refresh() }
             .toolbar {
                 ToolbarItem {
@@ -209,13 +209,13 @@ struct ContentView: View {
                     }
                     if let fraction = r.compiling {
                         ProgressView(value: fraction)
-                        Text(timeLeftLabel(r.compileSecondsLeft))
+                        Text(timeRemainingLabel(r.compileSecondsLeft))
                             .font(.caption).foregroundStyle(.secondary)
                     } else {
                         ProgressView(value: r.progress)
                         HStack(spacing: 12) {
                             if let s = r.lastStepSeconds { Text(String(format: "%.0f s/step", s)) }
-                            Text(timeLeftLabel(r.secondsLeft))
+                            Text(timeRemainingLabel(r.secondsLeft))
                             #if DEVELOPER
                             if let p = r.peakMemoryGB { Text(String(format: "peak %.1f GB", p)) }
                             if let a = r.availableMemoryGB { Text(String(format: "%.1f GB free", a)) }
@@ -325,14 +325,14 @@ struct ContentView: View {
         return "\(number) day\(days == 1 ? "" : "s")"
     }
 
-    /// "About 12 min left", to the nearest minute; "Estimating time left" until a step is done.
-    private func timeLeftLabel(_ seconds: Double?) -> String {
-        guard let seconds else { return "Estimating time left" }
-        if seconds < 60 { return "Less than a minute left" }
+    /// "About 12 min remaining", to the nearest minute; "Estimating time remaining" until a step is done.
+    private func timeRemainingLabel(_ seconds: Double?) -> String {
+        guard let seconds else { return "Estimating time remaining" }
+        if seconds < 60 { return "Less than a minute remaining" }
         let minutes = Int((seconds / 60).rounded())
         let duration = Duration.seconds(minutes * 60)
             .formatted(.units(allowed: [.hours, .minutes], width: .abbreviated))
-        return "About \(duration) left"
+        return "About \(duration) remaining"
     }
 
     #if DEVELOPER
