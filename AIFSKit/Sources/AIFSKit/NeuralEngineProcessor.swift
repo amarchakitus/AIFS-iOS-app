@@ -20,6 +20,10 @@ final class NeuralEngineProcessor: @unchecked Sendable {
         let chunks: Int
         let models: [String]
         let decoder: DecoderConfig?
+
+        static func load(from directory: URL) throws -> Config {
+            try JSONDecoder().decode(Config.self, from: Data(contentsOf: directory.appending(path: "coreml.json")))
+        }
     }
 
     struct DecoderConfig: Decodable {
@@ -34,15 +38,17 @@ final class NeuralEngineProcessor: @unchecked Sendable {
     private let models: [MLModel]
 
     /// Loads (and on first use, lets the OS compile for the Neural Engine) every model in
-    /// `directory`. Throws if any is missing; callers fall back to the GPU path.
-    init(directory: URL, channels: Int) throws {
-        config = try JSONDecoder().decode(
-            Config.self, from: Data(contentsOf: directory.appending(path: "coreml.json")))
+    /// `directory`, calling `loaded` with each one's index in `config.models` as it's ready.
+    /// Throws if any is missing; callers fall back to the GPU path.
+    init(directory: URL, config: Config, channels: Int, loaded: (Int) throws -> Void) throws {
+        self.config = config
         self.channels = channels
         let mlConfig = MLModelConfiguration()
         mlConfig.computeUnits = .cpuAndNeuralEngine
-        models = try config.models.map {
-            try MLModel(contentsOf: directory.appending(path: "\($0).mlmodelc"), configuration: mlConfig)
+        models = try config.models.enumerated().map { i, name in
+            let model = try MLModel(contentsOf: directory.appending(path: "\(name).mlmodelc"), configuration: mlConfig)
+            try loaded(i)
+            return model
         }
     }
 

@@ -44,6 +44,7 @@ struct ForecastViewer: View {
         // in a hard edge just under it.
         .background((mode == .places && !isGenerating ? Color(.systemGroupedBackground) : Color(.systemBackground)).ignoresSafeArea())
         .navigationTitle("Init \(forecast.meta.initDate.utcLabel)")
+        .navigationSubtitle(forecast.model.title)
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
             if let name = LaunchOptions.viewerMode,
@@ -264,7 +265,7 @@ private final class MapFrames {
     }
 
     nonisolated private static func render(forecast: StoredForecast, field: DisplayField, step: Int) throws -> RenderedMap? {
-        let renderer = try RendererCache.shared.renderer()
+        let renderer = try RendererCache.shared.renderer(for: forecast.model)
         // Only the field's own inputs, by byte range: a step file holds every stored output.
         let fields = try FieldFile.read(forecast.stepURL(step), fields: field.sources)
         let sources = try field.sources.map { name in
@@ -276,19 +277,23 @@ private final class MapFrames {
     }
 }
 
-/// One renderer (28 MB display operator) and one coastline per forecast, shared.
+/// One renderer per model (AIFS: a 28 MB operator from its grid to the display grid;
+/// Aurora: already on it) and one coastline per forecast, shared.
 nonisolated final class RendererCache: @unchecked Sendable {
     static let shared = RendererCache()
     private let lock = NSLock()
-    private var cached: MapRenderer?
+    private var cached: [ForecastModel: MapRenderer] = [:]
     private var coastlines: [URL: [Bool]] = [:]
 
-    func renderer() throws -> MapRenderer {
+    func renderer(for model: ForecastModel) throws -> MapRenderer {
         lock.lock()
         defer { lock.unlock() }
-        if let cached { return cached }
-        let r = try MapRenderer(bundle: AppPaths.bundle)
-        cached = r
+        if let r = cached[model] { return r }
+        let r = switch model {
+        case .aifs: try MapRenderer(bundle: AppPaths.bundle)
+        case .aurora: MapRenderer(grid: DisplayGrid(regularRows: 720, cols: 1440))
+        }
+        cached[model] = r
         return r
     }
 

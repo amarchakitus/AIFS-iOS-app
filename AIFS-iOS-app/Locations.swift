@@ -202,16 +202,22 @@ nonisolated struct PointForecast: Sendable {
     }
 }
 
-/// The model grid, loaded once (4 MB of coordinates).
+/// Each model's grid, loaded once (AIFS: 4 MB of coordinates from its bundle; Aurora: the
+/// regular 0.25-degree grid).
 @MainActor
 final class ModelGridCache {
     static let shared = ModelGridCache()
-    private var grid: ModelGrid?
+    private var grids: [ForecastModel: ModelGrid] = [:]
 
-    func grid() async -> ModelGrid? {
-        if let grid { return grid }
-        let g = await Task.detached { try? ModelGrid(bundle: AppPaths.bundle) }.value
-        grid = g
+    func grid(for model: ForecastModel) async -> ModelGrid? {
+        if let g = grids[model] { return g }
+        let g = await Task.detached { () -> ModelGrid? in
+            switch model {
+            case .aifs: try? ModelGrid(bundle: AppPaths.bundle)
+            case .aurora: ModelGrid(regularRows: 720, cols: 1440)
+            }
+        }.value
+        grids[model] = g
         return g
     }
 }

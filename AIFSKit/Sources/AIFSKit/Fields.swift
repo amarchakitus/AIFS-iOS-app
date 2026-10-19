@@ -131,6 +131,21 @@ public final class DisplayGrid: Sendable {
         guard op.rows == rows * cols else { throw AIFSError.invalidBundle("display operator shape") }
     }
 
+    /// A model that already runs on the 0.25-degree grid (Aurora), whose `rows` stop short
+    /// of the south pole: an identity, with the pole row copied from the last model row.
+    public init(regularRows modelRows: Int, cols: Int) {
+        rows = 721
+        self.cols = cols
+        let n = rows * cols
+        var indices = [Int32](repeating: 0, count: n)
+        for r in 0 ..< rows {
+            let source = min(r, modelRows - 1)
+            for c in 0 ..< cols { indices[r * cols + c] = Int32(source * cols + c) }
+        }
+        op = SparseOperator(indptr: (0 ... n).map { Int32($0) }, indices: indices,
+                            weights: [Float](repeating: 1, count: n), cols: modelRows * cols)
+    }
+
     public func regrid(_ field: [Float]) -> [Float] {
         op.apply(field).map(Float.init)
     }
@@ -166,6 +181,20 @@ public final class ModelGrid: Sendable {
     /// Index of the grid point nearest `(latitude, longitude)` (degrees; any longitude
     /// convention), by great-circle distance. N320 spacing is ~31 km, so this is within
     /// ~16 km of any point.
+    /// A regular latitude-longitude grid: `rows` from 90 N at `spacing` degrees, columns from
+    /// 0 E (Aurora's 720 x 1440).
+    public init(regularRows rows: Int, cols: Int, spacing: Float = 0.25) {
+        var lat = [Float](repeating: 0, count: rows * cols), lon = lat
+        for r in 0 ..< rows {
+            for c in 0 ..< cols {
+                lat[r * cols + c] = 90 - Float(r) * spacing
+                lon[r * cols + c] = Float(c) * spacing
+            }
+        }
+        latitudes = lat
+        longitudes = lon
+    }
+
     public func nearestIndex(latitude: Double, longitude: Double) -> Int {
         func unit(_ lat: Double, _ lon: Double) -> (Double, Double, Double) {
             let (p, l) = (lat * .pi / 180, lon * .pi / 180)

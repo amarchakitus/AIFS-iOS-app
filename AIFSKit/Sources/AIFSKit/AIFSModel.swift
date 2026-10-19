@@ -56,7 +56,12 @@ public final class AIFSModel: @unchecked Sendable {
 
     /// Load a bundle directory (`manifest.json`, `weights/graph/grid.safetensors`).
     /// `dtype` is the compute dtype; fp16 is what the checkpoint's autocast uses.
-    public init(bundle: URL, dtype: DType = .float16, useNeuralEngine: Bool = true) throws {
+    ///
+    /// The first load on a device compiles the Neural Engine models (minutes); after that
+    /// they come from the system's cache. `compiling` hears the fraction of them loaded:
+    /// 0 before the first, 1 after the last.
+    public init(bundle: URL, dtype: DType = .float16, useNeuralEngine: Bool = true,
+                compiling: (Double) throws -> Void = { _ in }) throws {
         let manifest = try Manifest.load(from: bundle.appending(path: "manifest.json"))
         self.manifest = manifest
         self.dtype = dtype
@@ -117,10 +122,27 @@ public final class AIFSModel: @unchecked Sendable {
         if useNeuralEngine, dtype == .float16,
             FileManager.default.fileExists(atPath: coreml.appending(path: "coreml.json").path)
         {
-            let processor = try NeuralEngineProcessor(directory: coreml, channels: manifest.numChannels)
+            let config = try NeuralEngineProcessor.Config.load(from: coreml)
+            // Weighted as compile time goes: a fixed cost per model plus its weights (the
+            // fit for Aurora's programs, see AuroraRuntime.prepare).
+            let costs = (config.models + [config.decoder?.model].compactMap { $0 }).map { name in
+                let weights = coreml.appending(path: "\(name).mlmodelc/weights/weight.bin")
+                return ((try? FileManager.default.attributesOfItem(atPath: weights.path))?[.size] as? Int ?? 0) + 27_500_000
+            }
+            let total = Double(costs.reduce(0, +))
+            var done = 0
+            try compiling(0)
+            let processor = try NeuralEngineProcessor(
+                directory: coreml, config: config, channels: manifest.numChannels
+            ) { i in
+                done += costs[i]
+                try compiling(Double(done) / total)
+            }
             neuralEngine = processor
-            neuralEngineDecoder = try processor.config.decoder.map {
-                try NeuralEngineDecoder(directory: coreml, config: $0, channels: manifest.numChannels)
+            neuralEngineDecoder = try config.decoder.map {
+                let decoder = try NeuralEngineDecoder(directory: coreml, config: $0, channels: manifest.numChannels)
+                try compiling(1)
+                return decoder
             }
             let onDecoder = neuralEngineDecoder != nil
             weights = weights.filter { !Self.runsOnNeuralEngine($0.key, decoder: onDecoder) }

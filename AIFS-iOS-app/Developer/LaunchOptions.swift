@@ -23,6 +23,13 @@ nonisolated enum LaunchOptions {
     static var openEarlierCycles: Bool { flag("--open-earlier-cycles") }
     /// `--download-model`: start the model download if none is installed (first launch).
     static var downloadModel: Bool { flag("--download-model") }
+    /// `--remove-documents a,b/c`: delete these items in Documents first (test leftovers).
+    static var removeDocuments: [String] { (value("--remove-documents") ?? "").split(separator: ",").map(String.init) }
+    /// `--select-model aifs|aurora`: the model to start with.
+    static var selectModel: String? { value("--select-model") }
+    /// `--download-latest`: fetch the newest cycle for the selected model, then run
+    /// `--autorun-steps` steps from it, if given.
+    static var downloadLatest: Bool { flag("--download-latest") }
 
     // MARK: Measuring the model on a device
 
@@ -38,6 +45,15 @@ nonisolated enum LaunchOptions {
     static var bench: Bool { flag("--bench") }
     /// `--ane-probe`: time every Core ML model copied into Documents/coreml.
     static var neuralEngineProbe: Bool { flag("--ane-probe") }
+    /// `--aurora-bench`: run Aurora 1.5's Neural Engine test case in Documents/aurora (from
+    /// aurora-1p5's `ane_export` and `ane_run --write-test`) and log time, memory and
+    /// accuracy; with `--aurora-stream`, loading each program only while it runs.
+    static var auroraBench: Bool { flag("--aurora-bench") }
+    static var auroraStream: Bool { flag("--aurora-stream") }
+    /// `--aurora-gpu 1,2`: stages whose blocks the GPU runs too, beside the Neural Engine.
+    static var auroraGPUStages: Set<Int> { Set((value("--aurora-gpu") ?? "").split(separator: ",").compactMap { Int($0) }) }
+    /// `--aurora-dir NAME`: the bundle's folder in Documents (default `aurora`).
+    static var auroraDirectory: String { value("--aurora-dir") ?? "aurora" }
 
     private static var args: [String] { ProcessInfo.processInfo.arguments }
     private static func flag(_ name: String) -> Bool { args.contains(name) }

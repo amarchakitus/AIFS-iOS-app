@@ -1,16 +1,24 @@
 import CryptoKit
 import Foundation
 
-/// Where the model bundle is published: the converted AIFS Single v2 weights, graph, Core ML
-/// processor and the regridding operators, as `local/publish_model.py` uploads them.
-/// Pinned to one commit, so a later upload can never hand an installed app a bundle it
-/// doesn't understand.
+/// Where each model's bundle is published, as `local/publish_model.py` uploads it: for
+/// AIFS, the converted weights, graph, Core ML processor and regridding operators; for
+/// Aurora, its Core ML programs, tables and metadata. Pinned to one commit each, so a later
+/// upload can never hand an installed app a bundle it doesn't understand.
 nonisolated enum ModelSource {
-    static let repo = "amarchakitus/aifs-single-v2-mlx"
-    static let revision = "ed19b8327b69a1027e6b5a26a6fad52f05d0e569"
+    static func repo(for model: ForecastModel) -> (repo: String, revision: String) {
+        switch model {
+        case .aifs: ("amarchakitus/aifs-single-v2-mlx", "ed19b8327b69a1027e6b5a26a6fad52f05d0e569")
+        case .aurora: ("amarchakitus/aurora-1.5-coreml", "4cbc8ae79c074bf16f7ab2f57f74524e4f1a8dfa")
+        }
+    }
 
-    static func url(_ path: String) -> URL {
-        URL(string: "https://huggingface.co/\(repo)/resolve/\(revision)/")!.appending(path: path)
+    /// Whether `model` can be downloaded (a commit is pinned).
+    static func isPublished(_ model: ForecastModel) -> Bool { !repo(for: model).revision.isEmpty }
+
+    static func url(_ model: ForecastModel, _ path: String) -> URL {
+        let (repo, revision) = repo(for: model)
+        return URL(string: "https://huggingface.co/\(repo)/resolve/\(revision)/")!.appending(path: path)
     }
 }
 
@@ -29,11 +37,14 @@ nonisolated struct BundleIndex: Codable, Sendable {
 /// then renames it into place: a half-finished download is never mistaken for a model,
 /// and a stopped one resumes, skipping the files it already has.
 nonisolated enum ModelDownloader {
-    static var staging: URL { AppPaths.documents.appending(path: "aifs-single-v2.partial", directoryHint: .isDirectory) }
+    static func staging(for model: ForecastModel) -> URL {
+        AppPaths.documents.appending(path: AppPaths.bundle(for: model).lastPathComponent + ".partial", directoryHint: .isDirectory)
+    }
 
-    /// The published bundle into the app's Documents. `progress(bytesDone, bytesTotal)`.
-    static func download(progress: @escaping @Sendable (Int64, Int64) -> Void) async throws {
-        try await download(from: ModelSource.url, staging: staging, into: AppPaths.bundle, progress: progress)
+    /// `model`'s published bundle into the app's Documents. `progress(bytesDone, bytesTotal)`.
+    static func download(_ model: ForecastModel, progress: @escaping @Sendable (Int64, Int64) -> Void) async throws {
+        try await download(from: { ModelSource.url(model, $0) }, staging: staging(for: model),
+                           into: AppPaths.bundle(for: model), progress: progress)
     }
 
     /// The bundle whose files `source(path)` locates, staged in `staging` and moved to

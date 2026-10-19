@@ -204,6 +204,10 @@ public final class MapRenderer: Sendable {
         grid = try DisplayGrid(bundle: bundle)
     }
 
+    public init(grid: DisplayGrid) {
+        self.grid = grid
+    }
+
     /// Land-sea boundary pixels (columns shifted to start at 180W), from the N320 mask.
     public func coastline(lsm: [Float]) -> [Bool] {
         let land = shiftToDateline(grid.regrid(lsm)).map { $0 >= 0.5 }

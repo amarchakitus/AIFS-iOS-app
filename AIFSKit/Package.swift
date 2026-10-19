@@ -6,10 +6,11 @@ import PackageDescription
 
 let package = Package(
     name: "AIFSKit",
-    platforms: [.iOS(.v18), .macOS(.v15)],
+    platforms: [.iOS("27.0"), .macOS("27.0")],
     products: [
         .library(name: "AIFSKit", targets: ["AIFSKit"]),
         .executable(name: "aifs-mlx", targets: ["aifs-mlx"]),
+        .executable(name: "aurora-ane", targets: ["aurora-ane"]),
     ],
     dependencies: [
         .package(url: "https://github.com/ml-explore/mlx-swift", .upToNextMinor(from: "0.32.3")),
@@ -17,8 +18,15 @@ let package = Package(
     targets: [
         .target(
             name: "AIFSKit",
-            dependencies: ["CAEC", .product(name: "MLX", package: "mlx-swift")]
+            dependencies: ["CAEC", "AuroraANE", .product(name: "MLX", package: "mlx-swift")]
         ),
+        // Aurora 1.5 on the Neural Engine (Core ML and Accelerate only; no MLX), from the
+        // programs aurora-1p5/aurora_1p5/ane_export.py writes.
+        .target(
+            name: "AuroraANE",
+            swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
+        .executableTarget(name: "aurora-ane", dependencies: ["AuroraANE"]),
         // libaec's CCSDS decoder, for GRIB2 open data (grid_ccsds). See Sources/CAEC/README.md.
         .target(
             name: "CAEC",

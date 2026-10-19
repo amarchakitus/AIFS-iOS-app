@@ -1,4 +1,5 @@
 import AIFSKit
+import AuroraANE
 import Foundation
 import Observation
 import UIKit
@@ -35,6 +36,16 @@ final class AppModel {
         #endif
         /// Stop was pressed. A step can't be interrupted, so the run ends when this one does.
         var stopping = false
+        /// The model's programs being compiled for this device before the first step (first
+        /// run, or after an update): the fraction done, and when compiling began.
+        var compiling: Double?
+        var compileStart = Date()
+
+        /// Time to the end of compiling, from its pace so far.
+        var compileSecondsLeft: Double? {
+            guard let f = compiling, f > 0.02 else { return nil }
+            return Date().timeIntervalSince(compileStart) / f * (1 - f)
+        }
 
         /// Time to the end of the run: the typical recent step times the steps still to do.
         /// The median, because a step that waited out a pause in the background takes as
@@ -50,6 +61,16 @@ final class AppModel {
         }
     }
 
+    /// The model the initial conditions, downloads and runs are for; remembered.
+    var selectedModel: ForecastModel = ForecastModel(rawValue: UserDefaults.standard.string(forKey: "model.selected") ?? "") ?? .aifs {
+        didSet {
+            guard selectedModel != oldValue else { return }
+            UserDefaults.standard.set(selectedModel.rawValue, forKey: "model.selected")
+            availableCycles = nil
+            refresh()
+        }
+    }
+    /// The selected model's state.
     var modelState: ModelState = .missing
     var manifestDescription = ""
     var initialConditions: [ICFile] = []
@@ -90,17 +111,23 @@ final class AppModel {
     }
 
     func refresh() {
-        initialConditions = ICFile.list()
+        initialConditions = ICFile.list().filter { $0.model == selectedModel }
         forecasts = StoredForecast.list()
-        if !AppPaths.bundleIsPresent {
-            modelState = .missing
-        } else if modelState == .missing {
-            modelState = .ready
-            // "AIFS Single v2 (aifs-single-mse-2.0)" -> "AIFS Single v2": the checkpoint name
-            // stays in the bundle's manifest, it is just not shown.
-            let description = (try? Manifest.load(from: AppPaths.bundle.appending(path: "manifest.json")))?
-                .description ?? ""
-            manifestDescription = description.components(separatedBy: " (").first ?? description
+        switch selectedModel {
+        case .aifs:
+            if !AppPaths.bundleIsPresent {
+                modelState = .missing
+            } else {
+                if modelState == .missing { modelState = .ready }
+                // "AIFS Single v2 (aifs-single-mse-2.0)" -> "AIFS Single v2": the checkpoint
+                // name stays in the bundle's manifest, it is just not shown.
+                let description = (try? Manifest.load(from: AppPaths.bundle.appending(path: "manifest.json")))?
+                    .description ?? ""
+                manifestDescription = description.components(separatedBy: " (").first ?? description
+            }
+        case .aurora:
+            modelState = AppPaths.isInstalled(.aurora) ? .ready : .missing
+            manifestDescription = ForecastModel.aurora.title
         }
     }
 
@@ -117,9 +144,10 @@ final class AppModel {
     func findAvailableCycles() {
         guard !findingCycles else { return }
         findingCycles = true
-        let engine = engine
+        let engine = engine, model = selectedModel
         Task {
-            availableCycles = (try? await Task.detached { try await engine.availableCycles() }.value) ?? []
+            let cycles = (try? await Task.detached { try await engine.availableCycles(model: model) }.value) ?? []
+            if model == selectedModel { availableCycles = cycles }
             findingCycles = false
         }
     }
@@ -130,9 +158,9 @@ final class AppModel {
         download = Download()
         downloadedICID = nil  // so the same cycle twice still re-selects it
         errorMessage = nil
-        let engine = engine
+        let engine = engine, model = selectedModel
         let work = Task.detached(priority: .userInitiated) {
-            try await engine.download(date: date) { progress in
+            try await engine.download(date: date, model: model) { progress in
                 // AppModel lives as long as the app, so holding it here is harmless.
                 Task { @MainActor in
                     self.download = Download(
@@ -178,9 +206,10 @@ final class AppModel {
         guard modelTask == nil else { return }
         errorMessage = nil
         modelDownload = (0, 0)
-        UIApplication.shared.isIdleTimerDisabled = true  // ~1 GB; don't let the screen lock stall it
+        UIApplication.shared.isIdleTimerDisabled = true  // 1-1.5 GB; don't let the screen lock stall it
+        let model = selectedModel
         let work = Task.detached(priority: .userInitiated) {
-            try await ModelDownloader.download { done, total in
+            try await ModelDownloader.download(model) { done, total in
                 Task { @MainActor in
                     if self.modelDownload != nil { self.modelDownload = (done, total) }
                 }
@@ -196,7 +225,7 @@ final class AppModel {
             }
             modelDownload = nil
             modelTask = nil
-            UIApplication.shared.isIdleTimerDisabled = false
+            allowScreenLock()
             refresh()
         }
     }
@@ -213,10 +242,12 @@ final class AppModel {
     func startForecast(from ic: ICFile, leadHours: Int) {
         guard runTask == nil, modelState == .ready || modelState == .loading else { return }
         errorMessage = nil
-        // A step peaks at ~3.1 GB of model memory plus the Core ML processor; the weights
-        // themselves (~0.6 GB) are already counted once loaded. Refuse up front rather
-        // than have iOS end the app part-way through a step.
-        let need = engine.isModelLoaded ? 3.0 : 3.8
+        // AIFS: a step peaks at ~3.1 GB of model memory plus the Core ML processor; the
+        // weights themselves (~0.6 GB) are already counted once loaded. Aurora: ~2 GB at the
+        // peak, its programs streamed onto the Neural Engine. Refuse up front rather than
+        // have iOS end the app part-way through a step.
+        let model = ic.model
+        let need = model == .aurora ? 2.5 : (engine.isModelLoaded ? 3.0 : 3.8)
         // On a Mac (the iPad app running there) there is no per-app memory cap and
         // os_proc_available_memory() means nothing; the machine's own memory is the limit.
         let free = ProcessInfo.processInfo.isiOSAppOnMac
@@ -233,7 +264,7 @@ final class AppModel {
         UIApplication.shared.isIdleTimerDisabled = true  // the GPU stops when the screen locks
         let engine = engine
         let work = Task.detached(priority: .userInitiated) {
-            try await engine.forecast(icURL: ic.url, steps: steps) { event in
+            try await engine.forecast(icURL: ic.url, model: model, steps: steps) { event in
                 Task { @MainActor in self.handle(event) }
             }
         }
@@ -256,7 +287,7 @@ final class AppModel {
             }
             run = nil
             runTask = nil
-            UIApplication.shared.isIdleTimerDisabled = false
+            allowScreenLock()
             refresh()
         }
     }
@@ -268,7 +299,7 @@ final class AppModel {
 
     /// The stored forecast a run from `ic` would replace, if there is one.
     func existingForecast(for ic: ICFile) -> StoredForecast? {
-        let dir = StoredForecast.directory(for: ic.date).lastPathComponent
+        let dir = StoredForecast.directory(for: ic.date, model: ic.model).lastPathComponent
         return forecasts.first { $0.id.lastPathComponent == dir }
     }
 
@@ -288,8 +319,12 @@ final class AppModel {
             // one from a finished step would push the bar a whole step ahead. Ignore those,
             // and never move the bar backwards.
             guard step > r.step else { return }
+            r.compiling = nil
             r.phase = phase.prefix(1).uppercased() + phase.dropFirst()  // "decoder" -> "Decoder"
             r.progress = max(r.progress, (Double(step - 1) + fraction) / Double(r.totalSteps))
+        case .compiling(let fraction, let started):
+            r.compileStart = started
+            r.compiling = fraction < 1 ? fraction : nil
         case .stepDone(let step, let seconds, let peak):
             #if DEVELOPER
             print(String(
@@ -312,6 +347,14 @@ final class AppModel {
         run = r
     }
 
+    /// After a download or a run, the screen may lock again -- except in developer builds,
+    /// which keep the device awake while the app is open (see DeveloperTools).
+    private func allowScreenLock() {
+        #if !DEVELOPER
+        UIApplication.shared.isIdleTimerDisabled = false
+        #endif
+    }
+
     func delete(_ forecast: StoredForecast) {
         if selectedForecastID == forecast.id { selectedForecastID = nil }
         try? FileManager.default.removeItem(at: forecast.url)
@@ -326,6 +369,8 @@ nonisolated final class Engine: @unchecked Sendable {
         /// Phase and fraction done of `step` (1-based), the one being computed.
         case progress(step: Int, phase: String, fraction: Double)
         case stepDone(step: Int, seconds: Double, peakBytes: Int)
+        /// The fraction of the model's programs compiled for the Neural Engine, since `started`.
+        case compiling(fraction: Double, started: Date)
     }
 
     private let lock = NSLock()
@@ -337,8 +382,9 @@ nonisolated final class Engine: @unchecked Sendable {
         return model != nil
     }
 
-    /// The model stays resident between runs (~540 MB); loading it takes a few seconds.
-    func loadedModel() throws -> AIFSModel {
+    /// The model stays resident between runs (~540 MB); loading it takes a few seconds, or
+    /// minutes on the first run, when its Neural Engine models compile (see `compiling`).
+    func loadedModel(compiling: (Double) throws -> Void) throws -> AIFSModel {
         lock.lock()
         defer { lock.unlock() }
         if let model { return model }
@@ -348,7 +394,7 @@ nonisolated final class Engine: @unchecked Sendable {
         // fp16, as the checkpoint autocasts; processor on the Neural Engine when the bundle
         // has its Core ML models (`--no-ane` at launch forces the GPU path, for comparison).
         let m = try AIFSModel(
-            bundle: AppPaths.bundle, useNeuralEngine: !LaunchOptions.noNeuralEngine)
+            bundle: AppPaths.bundle, useNeuralEngine: !LaunchOptions.noNeuralEngine, compiling: compiling)
         #if DEVELOPER
         print("[AIFS] model loaded, processor on \(m.usesNeuralEngine ? "Neural Engine" : "GPU")")
         #endif
@@ -361,14 +407,30 @@ nonisolated final class Engine: @unchecked Sendable {
         return try OpenDataClient(bundle: AppPaths.bundle, manifest: manifest)
     }
 
-    /// Cycles the mirrors can still serve, newest first.
-    func availableCycles() async throws -> [Date] {
-        let client = try openDataClient()
-        return await client.availableDates()
+    /// Cycles the mirrors can still serve for `model`, newest first.
+    func availableCycles(model: ForecastModel) async throws -> [Date] {
+        switch model {
+        case .aifs:
+            let client = try openDataClient()
+            return await client.availableDates()
+        case .aurora:
+            let client = try AuroraOpenData(bundle: AppPaths.auroraBundle)
+            return await client.availableDates()
+        }
     }
 
-    /// Download and assemble the initial condition for `date`, or the latest cycle.
-    func download(date: Date?, progress: @escaping @Sendable (OpenDataClient.Progress) -> Void) async throws -> URL {
+    /// Download and assemble `model`'s initial condition for `date`, or the latest cycle.
+    func download(date: Date?, model: ForecastModel, progress: @escaping @Sendable (OpenDataClient.Progress) -> Void) async throws -> URL {
+        if model == .aurora {
+            let client = try AuroraOpenData(bundle: AppPaths.auroraBundle)
+            let date = if let date { date } else { try await client.latestDate() }
+            let url = AppPaths.initialConditions.appending(path: AuroraOpenData.fileName(for: date))
+            if FileManager.default.fileExists(atPath: url.path) { return url }
+            let state = try await client.build(date: date, progress: progress)
+            try Task.checkCancellation()
+            try state.save(to: url)
+            return url
+        }
         let client = try openDataClient()
         let latest: Date
         if let date { latest = date } else { latest = try await client.latestDate() }
@@ -381,9 +443,10 @@ nonisolated final class Engine: @unchecked Sendable {
         return url
     }
 
-    func forecast(icURL: URL, steps: Int, report: @escaping @Sendable (Event) -> Void) async throws {
+    func forecast(icURL: URL, model kind: ForecastModel, steps: Int, report: @escaping @Sendable (Event) -> Void) async throws {
+        if kind == .aurora { return try await auroraForecast(icURL: icURL, steps: steps, report: report) }
         report(.progress(step: 1, phase: "Loading model", fraction: 0))
-        let model = try loadedModel()
+        let model = try loadedModel(compiling: Self.compileProgress(report))
         // Development tuning (Developer/LaunchOptions): speed and memory only.
         if let v = LaunchOptions.attentionBlock { model.attentionBlock = v }
         if let v = LaunchOptions.encoderChunks { model.encoderChunks = v }
@@ -402,7 +465,7 @@ nonisolated final class Engine: @unchecked Sendable {
         }()
         // Stopped while loading: leave any forecast already stored for this date alone.
         try Task.checkCancellation()
-        let dir = StoredForecast.directory(for: initDate)
+        let dir = StoredForecast.directory(for: initDate, model: .aifs)
         try? FileManager.default.removeItem(at: dir)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         var record = StoredForecast(
@@ -410,7 +473,7 @@ nonisolated final class Engine: @unchecked Sendable {
             meta: ForecastMeta(
                 initDate: initDate, stepHours: model.manifest.timestepHours, plannedSteps: steps,
                 completedSteps: 0, fields: stored, secondsPerStep: [], peakMemoryBytes: 0,
-                model: model.manifest.description, finished: false))
+                model: model.manifest.description, finished: false, kind: .aifs))
         if !statics.isEmpty {
             try FieldFile.write(statics, to: record.staticURL)
         }
@@ -450,5 +513,86 @@ nonisolated final class Engine: @unchecked Sendable {
             #endif
             report(.stepDone(step: s, seconds: seconds, peakBytes: AIFSRuntime.peakMemory))
         }
+    }
+
+    /// Turns a model's load progress (0 before its first program, 1 after its last) into
+    /// `.compiling` events, once loading turns out to be compiling: a program from the
+    /// system's cache loads in milliseconds, one compiled for this device takes seconds. So
+    /// a run whose programs are all cached never shows it.
+    private static func compileProgress(_ report: @escaping @Sendable (Event) -> Void) -> (Double) throws -> Void {
+        var start = Date(), last = start, compiling = false
+        return { fraction in
+            try Task.checkCancellation()
+            let now = Date()
+            // Not from its creation: AIFS reads its weights before it starts on its programs.
+            if fraction == 0 { start = now; last = now }
+            compiling = compiling || now.timeIntervalSince(last) > 1
+            last = now
+            #if DEVELOPER
+            print(String(format: "[AIFS] compiled %.3f at %.1f s", fraction, now.timeIntervalSince(start)))
+            #endif
+            if compiling { report(.compiling(fraction: fraction, started: start)) }
+        }
+    }
+
+    /// Aurora 1.5 from a state file: its programs streamed onto the Neural Engine, each step's
+    /// fields written as AIFS's are, on Aurora's 0.25-degree grid (720 x 1440).
+    private func auroraForecast(icURL: URL, steps: Int, report: @escaping @Sendable (Event) -> Void) async throws {
+        report(.progress(step: 1, phase: "Loading model", fraction: 0))
+        let bundle = AppPaths.auroraBundle
+        let state = try AuroraState.load(icURL)
+        // Everything on the Neural Engine, its programs streamed (~1.6 GB at the peak).
+        let forecaster = try AuroraForecaster(directory: bundle, state: state, options: .init(resident: false))
+        let stored = Array(Set(DisplayField.storedOutputs + ["sf"])).sorted()
+        // Compiled for the Neural Engine on the first run (minutes), from the cache after.
+        try forecaster.runtime.prepare(progress: Self.compileProgress(report))
+        try Task.checkCancellation()
+
+        let dir = StoredForecast.directory(for: state.time, model: .aurora)
+        try? FileManager.default.removeItem(at: dir)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        var record = StoredForecast(
+            url: dir,
+            meta: ForecastMeta(
+                initDate: state.time, stepHours: forecaster.metadata.step_hours, plannedSteps: steps,
+                completedSteps: 0, fields: stored, secondsPerStep: [], peakMemoryBytes: 0,
+                model: forecaster.metadata.model, finished: false, kind: .aurora))
+        // Land-sea mask (coastlines) and surface geopotential (globe relief).
+        let statics = try SafeTensorsFile(bundle.appending(path: "static.safetensors"))
+        let n = forecaster.metadata.grid.rows * forecaster.metadata.grid.cols
+        // Written without MLX: an Aurora run never starts the GPU.
+        try SafeTensorsWriter.write(record.staticURL, fields: Dictionary(uniqueKeysWithValues: ["lsm", "z"].map { name in
+            (name, Array(UnsafeBufferPointer(start: try! statics.pointer(name, as: Float.self), count: n)))
+        }))
+        try record.save()
+        report(.started(dir))
+
+        for s in 1 ... steps {
+            RunGate.shared.pass()
+            try Task.checkCancellation()
+            forecaster.runtime.onProgress = { phase, fraction in
+                // Between Neural Engine calls: where a backgrounded run can safely wait.
+                RunGate.shared.pass()
+                let overall = switch phase {
+                case "encoder": 0.02
+                case "processor": 0.08 + 0.85 * fraction
+                default: 0.95
+                }
+                report(.progress(step: s, phase: phase, fraction: overall))
+            }
+            let t = ContinuousClock.now
+            let (date, fields) = try forecaster.advance(wanted: stored)
+            let elapsed = ContinuousClock.now - t
+            let seconds = Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) / 1e18
+            try SafeTensorsWriter.write(record.stepURL(s), metadata: ["valid": date.ISO8601Format()], fields: fields)
+            let peak = ProcessMemory.footprint().peak
+            record.meta.completedSteps = s
+            record.meta.secondsPerStep.append(seconds)
+            record.meta.peakMemoryBytes = max(record.meta.peakMemoryBytes, peak)
+            record.meta.finished = s == steps
+            try record.save()
+            report(.stepDone(step: s, seconds: seconds, peakBytes: peak))
+        }
+        forecaster.runtime.onProgress = nil
     }
 }

@@ -65,7 +65,7 @@ struct WeatherDashboard: View {
     }
 
     private func load() async {
-        guard let grid = await ModelGridCache.shared.grid() else { return }
+        guard let grid = await ModelGridCache.shared.grid(for: forecast.model) else { return }
         for location in store.locations where points[location.id] == nil {
             let forecast = forecast
             if let p = await Task.detached(priority: .userInitiated, operation: {

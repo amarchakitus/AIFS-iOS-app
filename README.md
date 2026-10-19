@@ -83,10 +83,11 @@ device match within 3.3e-7. The fp16 Neural Engine path differs in 2 m temperatu
 ## Licence and attribution
 
 The code is BSD 3-Clause ([LICENSE](LICENSE)); the vendored libaec keeps its BSD 2-Clause
-licence. The AIFS Single v2 weights are © ECMWF under CC BY 4.0, and the initial conditions
-are ECMWF open data under CC BY 4.0 and the ECMWF Terms of Use. Full attribution and
+licence. The AIFS Single v2 weights are © ECMWF under CC BY 4.0; the Aurora 1.5 weights are
+© Microsoft under the MIT licence. The initial conditions are ECMWF open data under CC BY 4.0
+and the ECMWF Terms of Use. Full attribution and
 third-party licences are in the app, under Settings → Licences & attribution. The privacy
 policy is in [docs/privacy.md](docs/privacy.md).
 
-This project is not affiliated with or endorsed by ECMWF, and its forecasts are not ECMWF
-forecasts.
+This project is not affiliated with or endorsed by ECMWF or Microsoft, and its forecasts are
+not theirs.

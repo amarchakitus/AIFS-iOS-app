@@ -70,7 +70,7 @@ final class GlobeDataCache {
     func basemap(for forecast: StoredForecast) async -> GlobeBasemap? {
         if let b = basemaps[forecast.id] { return b }
         let b: GlobeBasemap? = await Task.detached(priority: .userInitiated) {
-            guard let renderer = try? RendererCache.shared.renderer(),
+            guard let renderer = try? RendererCache.shared.renderer(for: forecast.model),
                 let statics = try? FieldFile.read(forecast.staticURL), let lsm = statics["lsm"]
             else { return nil }
             // Surface geopotential to metres; absent in forecasts made before it was saved.
@@ -86,7 +86,7 @@ final class GlobeDataCache {
     private func load(_ data: GlobeLayerData, forecast: StoredForecast) {
         let field = data.field, wind = data.wind, total = data.total
         Task { [weak data] in
-            guard let renderer = try? RendererCache.shared.renderer() else { data?.fail(); return }
+            guard let renderer = try? RendererCache.shared.renderer(for: forecast.model) else { data?.fail(); return }
             for s in stride(from: 1, through: total, by: 1) {
                 guard let data else { return }  // evicted
                 let step: ([Float16]?, [Float16]?)? = await Task.detached(priority: .userInitiated) {

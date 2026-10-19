@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Licences and attribution: the model, the data it starts from, and the open-source
+/// Licences and attribution: the models, the data they start from, and the open-source
 /// software compiled into the app. Licence texts ship verbatim in `Licenses/`.
 struct AttributionView: View {
     var body: some View {
@@ -15,19 +15,29 @@ struct AttributionView: View {
                 }
                 Link("Model card on Hugging Face", destination: URL(string: "https://huggingface.co/ecmwf/aifs-single-2.0")!)
                 Link("CC BY 4.0 licence", destination: URL(string: "https://creativecommons.org/licenses/by/4.0/")!)
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Aurora 1.5").font(.headline)
+                    Text("© Microsoft Corporation. The model and its weights are licensed under the MIT licence. "
+                        + "This app converts them to Core ML programs, with 8-bit weights in its Swin blocks, "
+                        + "and runs them on this device's Neural Engine.")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                }
+                Link("Aurora 1.5 documentation", destination: URL(string: "https://microsoft.github.io/aurora/models.html#aurora-1-5-0-25")!)
             } header: {
-                Text("Forecast model")
+                Text("Forecast models")
             } footer: {
-                Text("Lang, S. et al. (2024). AIFS – ECMWF's data-driven forecasting system. arXiv:2406.01465.")
+                Text("Lang, S. et al. (2024). AIFS – ECMWF's data-driven forecasting system. arXiv:2406.01465.\n"
+                    + "Aurora 1.5 is fine-tuned from Aurora: Bodnar, C. et al. (2025). A foundation model for the Earth system. "
+                    + "Nature. doi:10.1038/s41586-025-09005-y.")
             }
 
             Section {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("ECMWF open data").font(.headline)
                     Text("Initial conditions contain modified ECMWF real-time open data, © ECMWF, used under "
-                        + "CC BY 4.0 and the ECMWF Terms of Use. They are regridded to the model grid and "
-                        + "combined into the model's input state. Served by ECMWF, and mirrored on Amazon "
-                        + "Web Services and Microsoft Azure.")
+                        + "CC BY 4.0 and the ECMWF Terms of Use, from the IFS and, for Aurora's cloud layers, AIFS. "
+                        + "They are regridded to the model grid where needed and combined into the model's input "
+                        + "state. Served by ECMWF, and mirrored on Amazon Web Services and Microsoft Azure.")
                         .font(.subheadline).foregroundStyle(.secondary)
                 }
                 Link("ECMWF open data", destination: URL(string: "https://www.ecmwf.int/en/forecasts/datasets/open-data")!)
@@ -48,7 +58,7 @@ struct AttributionView: View {
 
             Section {
                 Text("Forecasts in this app are computed on this device. They are not produced, checked "
-                    + "or endorsed by ECMWF, and should not be relied on where safety is at stake.")
+                    + "or endorsed by ECMWF or Microsoft, and should not be relied on where safety is at stake.")
                     .font(.subheadline).foregroundStyle(.secondary)
             } header: {
                 Text("Not an official forecast")
@@ -71,6 +81,7 @@ struct AttributionView: View {
     }
 
     private static let software: [(name: String, licence: String, file: String)] = [
+        ("Aurora", "MIT", "aurora"),
         ("MLX Swift", "MIT", "mlx-swift"),
         ("MLX", "MIT", "mlx"),
         ("MLX C", "MIT", "mlx-c"),

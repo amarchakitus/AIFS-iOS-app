@@ -4,6 +4,7 @@
 //   aifs-mlx --bundle exports/aifs-single-v2-float16 --ic exports/ic/ic_20260924T00.safetensors \
 //            --steps 3 --out /tmp/mlx-run [--dtype float32]
 import AIFSKit
+import AuroraANE
 import Foundation
 import ImageIO
 import MLX
@@ -16,6 +17,7 @@ func usage() -> Never {
         usage: aifs-mlx --bundle DIR --ic FILE [--steps N] [--out DIR] [--dtype float16|float32]
                         [--render DIR]   (PNG of every display field, every step)
                aifs-mlx --bundle DIR --fetch-ic latest|YYYYMMDDTHH --out DIR
+               aifs-mlx --bundle AURORA_DIR --aurora-ic YYYYMMDDTHH
         """)
     exit(2)
 }
@@ -27,6 +29,50 @@ while let flag = argv.popFirst() {
     options[String(flag.dropFirst(2))] = value
 }
 guard let bundle = options["bundle"] else { usage() }
+
+if let which = options["aurora-ic"] {
+    // Aurora 1.5's state from open data (YYYYMMDDTHH), written beside the bundle's test
+    // case and compared with it when that is for the same time (ane_run.py --write-test).
+    let f = DateFormatter()
+    f.dateFormat = "yyyyMMdd'T'HH"
+    f.timeZone = TimeZone(identifier: "UTC")
+    guard let date = f.date(from: which) else { usage() }
+    do {
+        let dir = URL(filePath: bundle)
+        let client = try AuroraOpenData(bundle: dir)
+        let t = ContinuousClock.now
+        let state = try await client.build(date: date) { p in
+            if p.completed == p.total || p.completed % 40 == 0 { print("  \(p.completed)/\(p.total) fields, \(p.bytes / 1_000_000) MB") }
+        }
+        print("built in \(ContinuousClock.now - t)")
+        let url = dir.appending(path: AuroraOpenData.fileName(for: date))
+        try state.save(to: url)
+        let reference = try AuroraState.load(dir.appending(path: "test_input.safetensors"))
+        if reference.time == date {
+            let meta = try AuroraMetadata.load(dir)
+            let n = 720 * 1440
+            func rms(_ a: UnsafePointer<Float16>, _ b: UnsafePointer<Float16>) -> (Double, Double) {
+                var s = 0.0, m = 0.0
+                for i in 0 ..< n { let d = abs(Double(a[i]) - Double(b[i])); s += d * d; m = max(m, d) }
+                return ((s / Double(n)).squareRoot(), m)
+            }
+            for (v, name) in meta.inputs.enumerated() {
+                let (r, m) = rms(state.surface(v, 1), reference.surface(v, 1))
+                let (r0, _) = rms(state.surface(v, 0), reference.surface(v, 0))
+                print(String(format: "  %-10@ rms %.1e (t-6h %.1e), max %.1e", name as NSString, r, r0, m))
+            }
+            for (v, name) in meta.atmosphere.enumerated() {
+                var worst = 0.0
+                for c in 0 ..< 13 { worst = max(worst, rms(state.atmosphere(v, 1, c), reference.atmosphere(v, 1, c)).0) }
+                print(String(format: "  %-10@ worst level rms %.1e", name as NSString, worst))
+            }
+        }
+    } catch {
+        print("error: \(error)")
+        exit(1)
+    }
+    exit(0)
+}
 
 if let which = options["fetch-ic"] {
     // Build initial conditions from ECMWF open data, exactly as the iPad does.

@@ -88,6 +88,19 @@ struct ContentView: View {
 
     @ViewBuilder private var modelSection: some View {
         Section("Model") {
+            // Which model the initial conditions below, the downloads and the runs are for.
+            // Locked while one is running: its inputs and its output belong to one model.
+            Picker("Model", selection: $app.selectedModel) {
+                ForEach(ForecastModel.allCases) { Text($0.shortName).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .disabled(app.run != nil || app.download != nil || app.modelDownload != nil)
+            modelStatus
+        }
+    }
+
+    @ViewBuilder private var modelStatus: some View {
+        Group {
             switch app.modelState {
             case .missing:
                 if let d = app.modelDownload {
@@ -105,8 +118,8 @@ struct ContentView: View {
                     } label: {
                         Label("Download the model", systemImage: "arrow.down.circle")
                     }
-                    Text("AIFS Single v2, about 1 GB from Hugging Face. Wi-Fi recommended; "
-                        + "a stopped download picks up where it left off.")
+                    .disabled(!ModelSource.isPublished(app.selectedModel))
+                    Text("\(app.selectedModel.title), about \(app.selectedModel == .aifs ? "1" : "1.3") GB from Hugging Face.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -186,21 +199,31 @@ struct ContentView: View {
             if let r = app.run {
                 VStack(alignment: .leading, spacing: 6) {
                     HStack {
-                        Text("Step \(min(r.step + 1, r.totalSteps)) of \(r.totalSteps)")
+                        if r.compiling != nil {
+                            Text("Compiling model…")
+                        } else {
+                            Text("Step \(min(r.step + 1, r.totalSteps)) of \(r.totalSteps)")
+                        }
                         Spacer()
                         NetworkGlyph(phase: r.phase, hot: app.isHot)
                     }
-                    ProgressView(value: r.progress)
-                    HStack(spacing: 12) {
-                        if let s = r.lastStepSeconds { Text(String(format: "%.0f s/step", s)) }
-                        Text(timeLeftLabel(r.secondsLeft))
-                        #if DEVELOPER
-                        if let p = r.peakMemoryGB { Text(String(format: "peak %.1f GB", p)) }
-                        if let a = r.availableMemoryGB { Text(String(format: "%.1f GB free", a)) }
-                        thermalLabel
-                        #endif
+                    if let fraction = r.compiling {
+                        ProgressView(value: fraction)
+                        Text(timeLeftLabel(r.compileSecondsLeft))
+                            .font(.caption).foregroundStyle(.secondary)
+                    } else {
+                        ProgressView(value: r.progress)
+                        HStack(spacing: 12) {
+                            if let s = r.lastStepSeconds { Text(String(format: "%.0f s/step", s)) }
+                            Text(timeLeftLabel(r.secondsLeft))
+                            #if DEVELOPER
+                            if let p = r.peakMemoryGB { Text(String(format: "peak %.1f GB", p)) }
+                            if let a = r.availableMemoryGB { Text(String(format: "%.1f GB free", a)) }
+                            thermalLabel
+                            #endif
+                        }
+                        .font(.caption).foregroundStyle(.secondary)
                     }
-                    .font(.caption).foregroundStyle(.secondary)
                     if r.stopping {
                         HStack(spacing: 6) {
                             ProgressView().controlSize(.mini)
@@ -331,7 +354,10 @@ struct ContentView: View {
                 let generating = app.run != nil && app.startedForecastID == f.id
                 HStack {
                     VStack(alignment: .leading) {
-                        Text("Init \(f.meta.initDate.utcLabel)")
+                        HStack(spacing: 6) {
+                            Text("Init \(f.meta.initDate.utcLabel)")
+                            ModelTag(model: f.model)
+                        }
                         Text(
                             (generating ? "Generating · " : "")
                                 + "+\(f.meta.completedSteps * f.meta.stepHours) h"
@@ -415,5 +441,21 @@ private struct EarlierCyclesSheet: View {
     private func age(_ date: Date) -> String {
         let hours = Int(Date.now.timeIntervalSince(date) / 3600)
         return hours < 48 ? "\(hours) h ago" : "\(hours / 24) days ago"
+    }
+}
+
+/// Which model made a forecast, as a small coloured tag.
+struct ModelTag: View {
+    let model: ForecastModel
+
+    var body: some View {
+        let tint: Color = model == .aurora ? .indigo : .teal
+        Text(model.shortName)
+            .font(.caption2.weight(.semibold))
+            .padding(.horizontal, 6)
+            .padding(.vertical, 1)
+            .foregroundStyle(tint)
+            .background(Capsule().fill(tint.opacity(0.15)))
+            .accessibilityLabel("Made by \(model.title)")
     }
 }
