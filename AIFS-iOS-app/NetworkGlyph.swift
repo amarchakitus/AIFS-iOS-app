@@ -3,15 +3,18 @@ import SwiftUI
 /// The model as a tiny network: input nodes on the left (encoder), the hidden mesh in the
 /// middle (processor), output nodes on the right (decoder). The part running now glows;
 /// the rest stays dim. While nothing is running yet (loading), the whole thing breathes.
+/// Running hot, the glow turns orange.
 struct NetworkGlyph: View {
     enum Stage { case encoder, processor, decoder }
 
     /// Nil while loading or between phases.
     let stage: Stage?
+    let hot: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// The engine's phase names ("Encoder", "Processor", "Decoder", "Loading model").
-    init(phase: String) {
+    init(phase: String, hot: Bool = false) {
+        self.hot = hot
         switch phase.lowercased() {
         case "encoder": stage = .encoder
         case "processor": stage = .processor
@@ -38,7 +41,7 @@ struct NetworkGlyph: View {
         .frame(width: 58 + 2 * Self.bleed, height: 22 + 2 * Self.bleed)
         .padding(-Self.bleed)
         .accessibilityElement()
-        .accessibilityLabel(stage.map { "\($0)".capitalized } ?? "Loading")
+        .accessibilityLabel((stage.map { "\($0)".capitalized } ?? "Loading") + (hot ? ", device hot" : ""))
     }
 
     private func draw(in context: inout GraphicsContext, origin: CGPoint, size: CGSize, pulse: Double) {
@@ -61,7 +64,8 @@ struct NetworkGlyph: View {
         ]
 
         let dim = Color.secondary.opacity(stage == nil ? 0.25 + 0.3 * pulse : 0.3)
-        let lit = Color.accentColor.opacity(pulse)
+        let glow = hot ? Color.orange : Color.accentColor
+        let lit = glow.opacity(pulse)
 
         func drawPart(_ ctx: inout GraphicsContext, nodes: [CGPoint], edges: [(CGPoint, CGPoint)], color: Color, radius: Double) {
             var lines = Path()
@@ -79,7 +83,7 @@ struct NetworkGlyph: View {
         }
         if let (_, nodes, edges) = parts.first(where: { $0.0 == stage }) {
             context.drawLayer { layer in
-                layer.addFilter(.shadow(color: Color.accentColor.opacity(0.9 * pulse), radius: 3.5))
+                layer.addFilter(.shadow(color: glow.opacity(0.9 * pulse), radius: 3.5))
                 drawPart(&layer, nodes: nodes, edges: edges, color: lit, radius: 2.5)
             }
         }

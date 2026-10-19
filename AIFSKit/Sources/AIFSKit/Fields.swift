@@ -136,8 +136,11 @@ public final class DisplayGrid: Sendable {
     }
 }
 
-/// Process-wide MLX memory knobs and readings.
+/// Process-wide MLX memory knobs and readings, and where diagnostics go.
 public enum AIFSRuntime {
+    /// Receives the library's diagnostics (a Neural Engine fallback taken, say). Silent
+    /// unless set: the CLI and developer builds of the app print them. Set once at launch.
+    nonisolated(unsafe) public static var log: @Sendable (String) -> Void = { _ in }
     /// Bytes MLX may keep cached for reuse. On iPad, keep this small: cached buffers count
     /// against the app's memory limit just like live ones.
     public static func setCacheLimit(_ bytes: Int) { Memory.cacheLimit = bytes }

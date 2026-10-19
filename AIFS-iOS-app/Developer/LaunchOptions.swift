@@ -1,8 +1,9 @@
 import Foundation
 
+#if DEVELOPER
 /// Launch arguments, for development only: none of them is reachable from the UI, and none
 /// changes a forecast's result. Pass them from Xcode's scheme, `xcrun simctl launch`, or
-/// `xcrun devicectl device process launch`.
+/// `xcrun devicectl device process launch`, to a developer build (AIFS_DEVELOPER = YES).
 nonisolated enum LaunchOptions {
     // MARK: Opening a screen directly (screenshots, the simulator)
 
@@ -45,3 +46,22 @@ nonisolated enum LaunchOptions {
     }
     private static func int(_ name: String) -> Int? { value(name).flatMap(Int.init) }
 }
+#else
+/// Not a developer build: every option off, so the code behind them compiles away and no
+/// launch argument does anything.
+nonisolated enum LaunchOptions {
+    static let openLatest = false
+    static let viewerMode: String? = nil
+    static let openGlobeSettings = false
+    static let openPlace = false
+    static let openAppSettings = false
+    static let openAttribution = false
+    static let openEarlierCycles = false
+    static let downloadModel = false
+    static let attentionBlock: Int? = nil
+    static let encoderChunks: Int? = nil
+    static let decoderChunks: Int? = nil
+    static let noNeuralEngine = false
+    static let neuralEngineProbe = false
+}
+#endif

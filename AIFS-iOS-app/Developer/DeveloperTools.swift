@@ -1,9 +1,11 @@
+#if DEVELOPER
 import AIFSKit
 import Foundation
 import os
 
 /// Development tooling run from launch arguments: the Neural Engine probe, the attention
-/// benchmark, and unattended runs for measuring a device. Kept apart from the app proper.
+/// benchmark, and unattended runs for measuring a device. Kept apart from the app proper,
+/// and compiled only into developer builds (AIFS_DEVELOPER = YES).
 extension AppModel {
     /// The measuring options, on launch (see LaunchOptions). Watch the log from a Mac with
     /// `xcrun devicectl device process launch --console`.
@@ -45,3 +47,4 @@ extension AppModel {
         startForecast(from: ic, leadHours: steps * 6)
     }
 }
+#endif

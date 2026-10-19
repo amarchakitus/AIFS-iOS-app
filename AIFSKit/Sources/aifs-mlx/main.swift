@@ -9,6 +9,8 @@ import ImageIO
 import MLX
 import UniformTypeIdentifiers
 
+AIFSRuntime.log = { print($0) }
+
 func usage() -> Never {
     print("""
         usage: aifs-mlx --bundle DIR --ic FILE [--steps N] [--out DIR] [--dtype float16|float32]

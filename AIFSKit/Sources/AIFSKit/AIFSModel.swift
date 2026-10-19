@@ -144,7 +144,7 @@ public final class AIFSModel: @unchecked Sendable {
     /// Reload the weights the Neural Engine path dropped, for the GPU fallback.
     private func ensureAllWeights() {
         guard !hasAllWeights else { return }
-        print("[AIFS] reloading GPU weights for the fallback path")
+        AIFSRuntime.log("[AIFS] reloading GPU weights for the fallback path")
         if let all = try? loadArrays(url: bundleURL.appending(path: "weights.safetensors")) {
             weights = all.mapValues { $0.dtype.isFloatingPoint ? $0.asType(dtype) : $0 }
             hasAllWeights = true
@@ -413,7 +413,7 @@ public final class AIFSModel: @unchecked Sendable {
             } catch {
                 // A Core ML failure mid-run is not recoverable for this step's state, but
                 // the GPU path below computes the same thing from the same input.
-                print("[AIFS] Neural Engine processor failed (\(error)); using the GPU")
+                AIFSRuntime.log("[AIFS] Neural Engine processor failed (\(error)); using the GPU")
             }
         }
         return processOnGPU(x0)
@@ -496,7 +496,7 @@ public final class AIFSModel: @unchecked Sendable {
                     onProgress?("decoder", Phase.decoder.at(Double(b) / Double(manifest.numDataNodes)))
                     continue
                 } catch {
-                    print("[AIFS] Neural Engine decoder failed (\(error)); using the GPU for this chunk")
+                    AIFSRuntime.log("[AIFS] Neural Engine decoder failed (\(error)); using the GPU for this chunk")
                 }
             }
             let out = mapperBlockTail("decoder", attention: att, dstNormed: dstNormed, dst: dst)

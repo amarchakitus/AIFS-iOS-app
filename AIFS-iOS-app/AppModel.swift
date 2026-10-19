@@ -27,10 +27,27 @@ final class AppModel {
         var progress = 0.0
         var phase = "Loading model"
         var lastStepSeconds: Double?
+        /// Every finished step's time, for the estimate of time left.
+        var stepSeconds: [Double] = []
+        #if DEVELOPER
         var availableMemoryGB: Double?
         var peakMemoryGB: Double?
+        #endif
         /// Stop was pressed. A step can't be interrupted, so the run ends when this one does.
         var stopping = false
+
+        /// Time to the end of the run: the typical recent step times the steps still to do.
+        /// The median, because a step that waited out a pause in the background takes as
+        /// long as the pause; recent steps, because a warm device slows down as it goes.
+        /// Nil until the first step finishes.
+        var secondsLeft: Double? {
+            guard !stepSeconds.isEmpty else { return nil }
+            let recent = stepSeconds.suffix(5).sorted()
+            let median = recent.count.isMultiple(of: 2)
+                ? (recent[recent.count / 2 - 1] + recent[recent.count / 2]) / 2
+                : recent[recent.count / 2]
+            return median * Double(totalSteps) * (1 - progress)
+        }
     }
 
     var modelState: ModelState = .missing
@@ -47,6 +64,8 @@ final class AppModel {
     /// Set when "Download latest" finishes; the view selects it as the run's input.
     var downloadedICID: URL?
     var thermalState = ProcessInfo.processInfo.thermalState
+    /// Hot enough that iOS is, or soon will be, slowing the device down.
+    var isHot: Bool { thermalState == .serious || thermalState == .critical }
     /// Bumped whenever a running forecast writes a step, so the viewer can refresh.
     var forecastRevision = 0
 
@@ -58,6 +77,9 @@ final class AppModel {
     private var downloadTask: Task<Void, Never>?
 
     init() {
+        #if DEVELOPER
+        AIFSRuntime.log = { print($0) }
+        #endif
         AppPaths.ensureDirectories()
         refresh()
         NotificationCenter.default.addObserver(
@@ -228,7 +250,9 @@ final class AppModel {
                 errorMessage = nil
             } catch {
                 errorMessage = "Forecast failed: \(error.localizedDescription)"
+                #if DEVELOPER
                 print("[AIFS] forecast failed: \(error)")
+                #endif
             }
             run = nil
             runTask = nil
@@ -267,19 +291,24 @@ final class AppModel {
             r.phase = phase.prefix(1).uppercased() + phase.dropFirst()  // "decoder" -> "Decoder"
             r.progress = max(r.progress, (Double(step - 1) + fraction) / Double(r.totalSteps))
         case .stepDone(let step, let seconds, let peak):
+            #if DEVELOPER
             print(String(
                 format: "[AIFS] step %d/%d: %.1f s, peak %.2f GB, %.2f GB available, thermal %d",
                 step, r.totalSteps, seconds, Double(peak) / 1e9,
                 Double(os_proc_available_memory()) / 1e9, ProcessInfo.processInfo.thermalState.rawValue))
+            r.peakMemoryGB = Double(peak) / 1e9
+            #endif
             r.step = step
             r.progress = max(r.progress, Double(step) / Double(r.totalSteps))
             r.lastStepSeconds = seconds
-            r.peakMemoryGB = Double(peak) / 1e9
+            r.stepSeconds.append(seconds)
             refresh()
             forecastRevision += 1
         }
+        #if DEVELOPER
         // Meaningless for the iPad app on a Mac (see startForecast): don't show it there.
         r.availableMemoryGB = ProcessInfo.processInfo.isiOSAppOnMac ? nil : Double(os_proc_available_memory()) / 1e9
+        #endif
         run = r
     }
 
@@ -320,7 +349,9 @@ nonisolated final class Engine: @unchecked Sendable {
         // has its Core ML models (`--no-ane` at launch forces the GPU path, for comparison).
         let m = try AIFSModel(
             bundle: AppPaths.bundle, useNeuralEngine: !LaunchOptions.noNeuralEngine)
+        #if DEVELOPER
         print("[AIFS] model loaded, processor on \(m.usesNeuralEngine ? "Neural Engine" : "GPU")")
+        #endif
         model = m
         return m
     }
@@ -413,8 +444,10 @@ nonisolated final class Engine: @unchecked Sendable {
             record.meta.peakMemoryBytes = max(record.meta.peakMemoryBytes, AIFSRuntime.peakMemory)
             record.meta.finished = s == steps
             try record.save()
+            #if DEVELOPER
             print("[AIFS] phases: " + model.lastTimings.map { String(format: "%@ %.2fs", $0.phase, $0.seconds) }
                 .joined(separator: ", ") + " (block \(model.attentionBlock), enc \(model.encoderChunks), dec \(model.decoderChunks))")
+            #endif
             report(.stepDone(step: s, seconds: seconds, peakBytes: AIFSRuntime.peakMemory))
         }
     }

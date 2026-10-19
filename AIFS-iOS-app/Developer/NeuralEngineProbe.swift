@@ -1,11 +1,12 @@
+#if DEVELOPER
 import CoreML
 import Foundation
 
 /// Times a compiled Core ML model with a `(1, 1024, 1, S)` fp16 input `x` on each compute
 /// unit, and reports where Core ML places its operations -- to decide whether the Neural
 /// Engine is worth using for a layer before building anything on it.
-public enum NeuralEngineProbe {
-    public static func report(modelURL: URL, flopsPerCall: Double) async -> [String] {
+nonisolated enum NeuralEngineProbe {
+    static func report(modelURL: URL, flopsPerCall: Double) async -> [String] {
         var lines: [String] = []
         let name = modelURL.deletingPathExtension().lastPathComponent
         for (label, units) in [("ANE", MLComputeUnits.cpuAndNeuralEngine), ("GPU", .cpuAndGPU)] {
@@ -64,3 +65,4 @@ public enum NeuralEngineProbe {
         return lines
     }
 }
+#endif

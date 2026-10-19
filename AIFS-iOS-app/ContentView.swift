@@ -62,10 +62,12 @@ struct ContentView: View {
         }
         .onAppear {
             if selectedIC == nil { selectedIC = app.initialConditions.first?.url }
+            #if DEVELOPER
             // Development options (Developer/LaunchOptions); all off in normal use.
             app.autorunIfRequested()
             if LaunchOptions.downloadModel, app.modelState == .missing { app.downloadModel() }
             if LaunchOptions.openLatest { app.selectedForecastID = app.forecasts.first?.id }
+            #endif
         }
         .onChange(of: app.downloadedICID) { _, id in
             if let id { selectedIC = id }
@@ -186,14 +188,17 @@ struct ContentView: View {
                     HStack {
                         Text("Step \(min(r.step + 1, r.totalSteps)) of \(r.totalSteps)")
                         Spacer()
-                        NetworkGlyph(phase: r.phase)
+                        NetworkGlyph(phase: r.phase, hot: app.isHot)
                     }
                     ProgressView(value: r.progress)
                     HStack(spacing: 12) {
                         if let s = r.lastStepSeconds { Text(String(format: "%.0f s/step", s)) }
+                        Text(timeLeftLabel(r.secondsLeft))
+                        #if DEVELOPER
                         if let p = r.peakMemoryGB { Text(String(format: "peak %.1f GB", p)) }
                         if let a = r.availableMemoryGB { Text(String(format: "%.1f GB free", a)) }
                         thermalLabel
+                        #endif
                     }
                     .font(.caption).foregroundStyle(.secondary)
                     if r.stopping {
@@ -297,6 +302,17 @@ struct ContentView: View {
         return "\(number) day\(days == 1 ? "" : "s")"
     }
 
+    /// "About 12 min left", to the nearest minute; "Estimating time left" until a step is done.
+    private func timeLeftLabel(_ seconds: Double?) -> String {
+        guard let seconds else { return "Estimating time left" }
+        if seconds < 60 { return "Less than a minute left" }
+        let minutes = Int((seconds / 60).rounded())
+        let duration = Duration.seconds(minutes * 60)
+            .formatted(.units(allowed: [.hours, .minutes], width: .abbreviated))
+        return "About \(duration) left"
+    }
+
+    #if DEVELOPER
     @ViewBuilder private var thermalLabel: some View {
         switch app.thermalState {
         case .serious: Label("hot", systemImage: "thermometer.high").foregroundStyle(.orange)
@@ -304,6 +320,7 @@ struct ContentView: View {
         default: EmptyView()
         }
     }
+    #endif
 
     @ViewBuilder private var forecastSection: some View {
         Section("Forecasts") {

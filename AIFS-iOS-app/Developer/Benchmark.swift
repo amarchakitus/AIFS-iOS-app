@@ -1,9 +1,10 @@
+#if DEVELOPER
 import Foundation
 import MLX
 
 /// GPU microbenchmarks at the model's own shapes, to tell kernel inefficiency apart from
 /// thermal limits on a device.
-public enum AIFSBenchmark {
+nonisolated enum AIFSBenchmark {
     static func seconds(_ f: () -> MLXArray, repeats: Int) -> Double {
         eval(f())  // warm up: compile kernels, allocate
         let t = ContinuousClock.now
@@ -14,7 +15,7 @@ public enum AIFSBenchmark {
 
     /// Achieved TFLOPS of `(rows, inner) @ (inner, cols)` with a transposed weight, as the
     /// model's linear layers run it.
-    public static func matmul(rows: Int, inner: Int, cols: Int, dtype: DType, repeats: Int = 5) -> Double {
+    static func matmul(rows: Int, inner: Int, cols: Int, dtype: DType, repeats: Int = 5) -> Double {
         let x = MLXRandom.normal([rows, inner]).asType(dtype)
         let w = MLXRandom.normal([cols, inner]).asType(dtype)
         eval(x, w)
@@ -23,7 +24,7 @@ public enum AIFSBenchmark {
     }
 
     /// Seconds for one processor layer's banded attention with query blocks of `block`.
-    public static func bandedAttention(block: Int, tokens: Int = 40320, heads: Int = 16, dim: Int = 64,
+    static func bandedAttention(block: Int, tokens: Int = 40320, heads: Int = 16, dim: Int = 64,
                                        window: Int = 1120, repeats: Int = 3) -> Double {
         let q = MLXRandom.normal([1, heads, tokens, dim]).asType(.float16)
         let k = MLXRandom.normal([1, heads, tokens, dim]).asType(.float16)
@@ -72,7 +73,7 @@ public enum AIFSBenchmark {
     }
 
     /// A short report, one line per measurement.
-    public static func report() -> [String] {
+    static func report() -> [String] {
         var lines: [String] = []
         for rows in [4235, 8470, 16940, 33880, 67760] {
             let t = matmul(rows: rows, inner: 1024, cols: 4096, dtype: .float16)
@@ -84,3 +85,4 @@ public enum AIFSBenchmark {
         return lines
     }
 }
+#endif

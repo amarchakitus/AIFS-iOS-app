@@ -29,6 +29,12 @@ memory free for the app.
 
 The simulator shows the viewers but can't run the model: MLX needs a real Metal device.
 
+Development tooling is compiled in only when the build setting `AIFS_DEVELOPER` is `YES`
+(in the target's build settings, or `xcodebuild … AIFS_DEVELOPER=YES`). That adds memory
+and thermal readouts during a run, the launch-argument hooks in
+`AIFS-iOS-app/Developer/LaunchOptions.swift`, the Neural Engine probe and benchmark, and
+diagnostic logging.
+
 ## How it works
 
 PyTorch doesn't run on iOS, so the network is reimplemented in
