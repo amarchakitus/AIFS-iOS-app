@@ -27,9 +27,6 @@ struct AppSettingsView: View {
                     }
                 } header: {
                     Text("Units")
-                } footer: {
-                    Text("Applies to maps, globes and places. Colours stay tied to the physical value, "
-                        + "so a colour means the same weather in any units; only the labels change.")
                 }
                 Section {
                     Button {
