@@ -19,6 +19,15 @@ nonisolated enum LaunchOptions {
     /// licences page.
     static var openAppSettings: Bool { flag("--open-app-settings") }
     static var openAttribution: Bool { flag("--open-attribution") }
+    /// With `--open-app-settings`, `--open-models`: its Models page.
+    static var openModels: Bool { flag("--open-models") }
+    /// With `--open-models`, `--edit-models`: in edit mode, the first model selected.
+    static var editModels: Bool { flag("--edit-models") }
+    /// `--confirm`: also ask the open page's confirmation (Settings' clear, or with
+    /// `--edit-models` the Models page's delete), for screenshots.
+    static var confirm: Bool { flag("--confirm") }
+    /// `--delete-models aifs,aurora`: delete these models as Settings' Models page does.
+    static var deleteModels: [String] { (value("--delete-models") ?? "").split(separator: ",").map(String.init) }
     /// `--open-earlier-cycles`: the earlier-cycles sheet.
     static var openEarlierCycles: Bool { flag("--open-earlier-cycles") }
     /// `--download-model`: start the model download if none is installed (first launch).
@@ -85,6 +94,9 @@ nonisolated enum LaunchOptions {
     static let openPlace = false
     static let openAppSettings = false
     static let openAttribution = false
+    static let openModels = false
+    static let editModels = false
+    static let confirm = false
     static let openEarlierCycles = false
     static let downloadModel = false
     static let attentionBlock: Int? = nil

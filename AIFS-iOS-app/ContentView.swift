@@ -126,7 +126,7 @@ struct ContentView: View {
             case .loading:
                 Label("Loading…", systemImage: "hourglass")
             case .ready:
-                Label(app.manifestDescription, systemImage: "cpu")
+                EmptyView()  // the picker names it
             case .failed(let why):
                 Label(why, systemImage: "xmark.octagon").foregroundStyle(.red)
             }

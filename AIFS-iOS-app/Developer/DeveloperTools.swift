@@ -117,6 +117,11 @@ extension AppModel {
             return
         }
         if let name = LaunchOptions.selectModel, let model = ForecastModel(rawValue: name) { selectedModel = model }
+        if !LaunchOptions.deleteModels.isEmpty {
+            let models = Set(LaunchOptions.deleteModels.compactMap(ForecastModel.init(rawValue:)))
+            print("[AIFS] deleting models: \(models.map(\.shortName).sorted())")
+            deleteModels(models)
+        }
         if let range = LaunchOptions.clearICs {
             let since: Date? = switch range {
             case "day": .now.addingTimeInterval(-86400)

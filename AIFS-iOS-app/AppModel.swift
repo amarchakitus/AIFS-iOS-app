@@ -73,7 +73,6 @@ final class AppModel {
     }
     /// The selected model's state.
     var modelState: ModelState = .missing
-    var manifestDescription = ""
     var initialConditions: [ICFile] = []
     var forecasts: [StoredForecast] = []
     var download: Download?
@@ -119,17 +118,11 @@ final class AppModel {
         case .aifs:
             if !AppPaths.bundleIsPresent {
                 modelState = .missing
-            } else {
-                if modelState == .missing { modelState = .ready }
-                // "AIFS Single v2 (aifs-single-mse-2.0)" -> "AIFS Single v2": the checkpoint
-                // name stays in the bundle's manifest, it is just not shown.
-                let description = (try? Manifest.load(from: AppPaths.bundle.appending(path: "manifest.json")))?
-                    .description ?? ""
-                manifestDescription = description.components(separatedBy: " (").first ?? description
+            } else if modelState == .missing {
+                modelState = .ready
             }
         case .aurora, .graphcast:
             modelState = AppPaths.isInstalled(selectedModel) ? .ready : .missing
-            manifestDescription = selectedModel.title
         }
     }
 
@@ -230,6 +223,31 @@ final class AppModel {
     }
 
     func cancelModelDownload() { modelTask?.cancel() }
+
+    /// Whether models can be deleted now: not while one runs or anything downloads.
+    var canDeleteModels: Bool { run == nil && download == nil && modelDownload == nil }
+
+    /// Deletes `models`' bundles, and the initial conditions only they could use. Forecasts
+    /// stay, and stay viewable: AIFS keeps the two files its maps and places need (its
+    /// display operator and grid, 32 MB); Aurora's and GraphCast's need nothing.
+    func deleteModels(_ models: Set<ForecastModel>) {
+        guard canDeleteModels else { return }
+        if models.contains(.aifs) { engine.unloadModel() }
+        // Named while their bundles still say which messages they read.
+        let initialConditions = models.flatMap { model in
+            InitialConditionStore.list(model).map { ($0, InitialConditionStore.keys(model, date: $0.date) ?? []) }
+        }
+        for model in models {
+            let bundle = AppPaths.bundle(for: model)
+            let keep: Set<String> = model == .aifs ? ["display.safetensors", "grid.safetensors"] : []
+            let files = (try? FileManager.default.contentsOfDirectory(at: bundle, includingPropertiesForKeys: nil)) ?? []
+            for url in files where !keep.contains(url.lastPathComponent) { try? FileManager.default.removeItem(at: url) }
+            if keep.isEmpty { try? FileManager.default.removeItem(at: bundle) }
+            try? FileManager.default.removeItem(at: ModelDownloader.staging(for: model))
+        }
+        InitialConditionStore.forget(initialConditions)
+        refresh()
+    }
 
     func delete(_ ic: ICFile) {
         InitialConditionStore.delete(ic)
@@ -384,6 +402,13 @@ nonisolated final class Engine: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return model != nil
+    }
+
+    /// Lets the loaded AIFS model go (its bundle is being deleted).
+    func unloadModel() {
+        lock.lock()
+        model = nil
+        lock.unlock()
     }
 
     /// The model stays resident between runs (~540 MB); loading it takes a few seconds, or

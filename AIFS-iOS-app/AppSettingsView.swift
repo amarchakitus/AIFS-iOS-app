@@ -6,8 +6,10 @@ struct AppSettingsView: View {
     let app: AppModel
     @Environment(\.dismiss) private var dismiss
     @State private var showAttribution = LaunchOptions.openAttribution
+    @State private var showModels = LaunchOptions.openModels
     @State private var initialConditionBytes: Int?
-    @State private var confirmClear = false
+    @State private var modelSizes: [ForecastModel: Int]?
+    @State private var confirmClear = LaunchOptions.openAppSettings && LaunchOptions.confirm && !LaunchOptions.openModels
     @State private var clearing = false
 
     var body: some View {
@@ -33,6 +35,17 @@ struct AppSettingsView: View {
                     Text("Units")
                 }
                 Section {
+                    NavigationLink {
+                        ModelStorageView(app: app, sizes: $modelSizes)
+                    } label: {
+                        LabeledContent("Models") {
+                            if let sizes = modelSizes {
+                                Text(ByteCountFormatter.string(fromByteCount: Int64(sizes.values.reduce(0, +)), countStyle: .file))
+                            } else {
+                                ProgressView().controlSize(.small)
+                            }
+                        }
+                    }
                     LabeledContent("Initial conditions") {
                         if let bytes = initialConditionBytes {
                             Text(ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file))
@@ -45,10 +58,11 @@ struct AppSettingsView: View {
                 } header: {
                     Text("Storage")
                 }
-                .confirmationDialog("Clear initial conditions", isPresented: $confirmClear, titleVisibility: .visible) {
+                .alert("Clear initial conditions", isPresented: $confirmClear) {
                     Button("Past day", role: .destructive) { clear(since: .now.addingTimeInterval(-86400)) }
                     Button("Past week", role: .destructive) { clear(since: .now.addingTimeInterval(-7 * 86400)) }
                     Button("All time", role: .destructive) { clear(since: nil) }
+                    Button("Cancel", role: .cancel) {}
                 } message: {
                     Text("Forecasts are kept.")
                 }
@@ -69,12 +83,19 @@ struct AppSettingsView: View {
                 }
             }
             .navigationDestination(isPresented: $showAttribution) { AttributionView() }
+            .navigationDestination(isPresented: $showModels) { ModelStorageView(app: app, sizes: $modelSizes) }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
             }
-            .task { await measure() }
+            .task {
+                async let models = ModelStorageView.measure()
+                await measure()
+                modelSizes = await models
+            }
+            // Deleting a model deletes the initial conditions only it could use.
+            .onChange(of: modelSizes) { Task { await measure() } }
         }
     }
 

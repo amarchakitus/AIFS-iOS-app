@@ -132,6 +132,25 @@ nonisolated enum InitialConditionStore {
         for date in Set(keys.map(\.date)) { cache.retain(live, cycle: date) }
     }
 
+    /// Forgets initial conditions whose model is gone (named with their messages while it
+    /// was there): their files, and their messages no remaining one reads.
+    static func forget(_ entries: [(ICFile, [OpenDataCache.Key])]) {
+        for (ic, _) in entries { if let file = ic.file { try? FileManager.default.removeItem(at: file) } }
+        let live = liveKeys()
+        for date in Set(entries.flatMap { $0.1.map(\.date) }) { cache.retain(live, cycle: date) }
+    }
+
+    /// Bytes `model`'s installed bundle takes (0 if it isn't installed).
+    static func bundleBytes(_ model: ForecastModel) -> Int {
+        guard AppPaths.isInstalled(model) else { return 0 }
+        var total = 0
+        let files = FileManager.default.enumerator(at: AppPaths.bundle(for: model), includingPropertiesForKeys: [.fileSizeKey])
+        while let url = files?.nextObject() as? URL {
+            total += (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+        }
+        return total
+    }
+
     /// Every model's initial conditions.
     static func all() -> [ICFile] { ForecastModel.allCases.flatMap(list) }
 
