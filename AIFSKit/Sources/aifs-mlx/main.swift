@@ -6,6 +6,7 @@
 import AIFSKit
 import AuroraANE
 import Foundation
+import GraphCastANE
 import ImageIO
 import MLX
 import UniformTypeIdentifiers
@@ -18,6 +19,9 @@ func usage() -> Never {
                         [--render DIR]   (PNG of every display field, every step)
                aifs-mlx --bundle DIR --fetch-ic latest|YYYYMMDDTHH --out DIR
                aifs-mlx --bundle AURORA_DIR --aurora-ic YYYYMMDDTHH
+               aifs-mlx --bundle GRAPHCAST_DIR --graphcast-ic YYYYMMDDTHH --out DIR
+               aifs-mlx --bundle GRAPHCAST_DIR --graphcast-forecast STATE --steps N
+                        (scored against the IFS analyses at each valid time)
         """)
     exit(2)
 }
@@ -29,6 +33,80 @@ while let flag = argv.popFirst() {
     options[String(flag.dropFirst(2))] = value
 }
 guard let bundle = options["bundle"] else { usage() }
+
+let cycleFormat: DateFormatter = {
+    let f = DateFormatter()
+    f.dateFormat = "yyyyMMdd'T'HH"
+    f.timeZone = TimeZone(identifier: "UTC")
+    return f
+}()
+
+if let which = options["graphcast-ic"] {
+    // GraphCast's state from open data, into --out (never the bundle: that gets published).
+    guard let date = cycleFormat.date(from: which), let out = options["out"] else { usage() }
+    do {
+        let t = Date()
+        let state = try await GraphCastOpenData(bundle: URL(filePath: bundle)).build(date: date) { p in
+            if p.completed % 40 == 0 { print("  \(p.completed)/\(p.total) fields, \(p.bytes / 1_000_000) MB") }
+        }
+        let url = URL(filePath: out).appending(path: GraphCastOpenData.fileName(for: date))
+        try FileManager.default.createDirectory(at: URL(filePath: out), withIntermediateDirectories: true)
+        try state.save(to: url)
+        print(String(format: "wrote %@ in %.1f s", url.path, Date().timeIntervalSince(t)))
+        exit(0)
+    } catch {
+        print("failed: \(error)")
+        exit(1)
+    }
+}
+
+if let path = options["graphcast-forecast"] {
+    // A rollout from a state file, each step scored against the IFS analysis at its valid
+    // time (from open data), with persistence (the initial state) for comparison.
+    let steps = Int(options["steps"] ?? "1") ?? 1
+    do {
+        let state = try GraphCastState.load(URL(filePath: path))
+        let initial = state.time
+        let fc = try GraphCastForecaster(directory: URL(filePath: bundle), state: state)
+        let names = ["z_500", "t_850", "2t", "msl", "10u", "q_700"]
+        // Persistence: the initial state's fields, north first.
+        let start = try fc.persistence(names)
+        let data = try GraphCastOpenData(bundle: URL(filePath: bundle))
+        for s in 1 ... steps {
+            let t = Date()
+            let (valid, fields) = try fc.advance(wanted: names + ["tp"])
+            let took = Date().timeIntervalSince(t)
+            let truth = try await data.build(date: valid)
+            let tf = try GraphCastForecaster.northFirst(truth, names)
+            var line = String(format: "step %d (+%dh, %@) in %.1f s:", s, Int(valid.timeIntervalSince(initial) / 3600),
+                              cycleFormat.string(from: valid), took)
+            for name in names {
+                line += String(format: " %@ %.4g (persistence %.4g)", name, rmse(fields[name]!, tf[name]!), rmse(start[name]!, tf[name]!))
+            }
+            let tp = fields["tp"]!
+            line += String(format: "; tp mean %.3f mm, max %.1f mm", tp.reduce(0, +) / Float(tp.count) * 1000, (tp.max() ?? 0) * 1000)
+            print(line)
+        }
+        exit(0)
+    } catch {
+        print("failed: \(error)")
+        exit(1)
+    }
+}
+
+/// Latitude-weighted RMSE of two 721 x 1440 fields, north first.
+func rmse(_ a: [Float], _ b: [Float]) -> Double {
+    var num = 0.0, den = 0.0
+    for r in 0 ..< 721 {
+        let w = cos((90 - Double(r) * 0.25) * .pi / 180)
+        for c in 0 ..< 1440 {
+            let d = Double(a[r * 1440 + c] - b[r * 1440 + c])
+            num += w * d * d
+        }
+        den += w * 1440
+    }
+    return (num / den).squareRoot()
+}
 
 if let which = options["aurora-ic"] {
     // Aurora 1.5's state from open data (YYYYMMDDTHH), written beside the bundle's test

@@ -110,10 +110,16 @@ nonisolated struct WeatherCondition: Sendable, Hashable {
             }
             return
         }
-        let cloud = s.tcc ?? 0
         if let w = s.windSpeed, w >= 14 {
             self.init(text: "Windy", symbol: "wind")
-        } else if cloud < 0.15 {
+            return
+        }
+        // A model without clouds (GraphCast) says only that it stays dry.
+        guard let cloud = s.tcc else {
+            self.init(text: "Dry", symbol: s.isDay ? "sun.haze.fill" : "moon.haze.fill")
+            return
+        }
+        if cloud < 0.15 {
             self.init(text: s.isDay ? "Sunny" : "Clear", symbol: s.isDay ? "sun.max.fill" : "moon.stars.fill")
         } else if cloud < 0.45 {
             self.init(text: "Mostly Clear", symbol: s.isDay ? "cloud.sun.fill" : "cloud.moon.fill")
@@ -202,8 +208,8 @@ nonisolated struct PointForecast: Sendable {
     }
 }
 
-/// Each model's grid, loaded once (AIFS: 4 MB of coordinates from its bundle; Aurora: the
-/// regular 0.25-degree grid).
+/// Each model's grid, loaded once (AIFS: 4 MB of coordinates from its bundle; Aurora and
+/// GraphCast: the regular 0.25-degree grid, GraphCast's down to the south pole).
 @MainActor
 final class ModelGridCache {
     static let shared = ModelGridCache()
@@ -215,6 +221,7 @@ final class ModelGridCache {
             switch model {
             case .aifs: try? ModelGrid(bundle: AppPaths.bundle)
             case .aurora: ModelGrid(regularRows: 720, cols: 1440)
+            case .graphcast: ModelGrid(regularRows: 721, cols: 1440)
             }
         }.value
         grids[model] = g

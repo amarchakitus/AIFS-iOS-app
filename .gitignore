@@ -28,6 +28,7 @@ dd*/
 
 # Swift / Xcode
 .build/
+.build-xcode
 .swiftpm/
 DerivedData/
 xcuserdata/

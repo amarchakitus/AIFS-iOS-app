@@ -1,6 +1,7 @@
 #if DEVELOPER
 import AIFSKit
 import AuroraANE
+import GraphCastANE
 import Foundation
 import os
 import UIKit
@@ -67,6 +68,39 @@ extension AppModel {
                 log("\(name): \(stream ? "streaming" : "resident") programs, GPU stages \(gpu.sorted()), thermal \(ProcessInfo.processInfo.thermalState.rawValue)")
                 do {
                     try AuroraSelfTest.run(directory: dir, options: .init(resident: !stream, gpuStages: gpu), steps: 2, log: log)
+                } catch {
+                    log("failed: \(error)")
+                }
+                log("done, thermal \(ProcessInfo.processInfo.thermalState.rawValue)")
+            }
+            return
+        }
+        if let trials = LaunchOptions.graphcastProbe {
+            Task.detached(priority: .userInitiated) {
+                GraphCastProbe.run(trials: trials) { print("[AIFS] graphcast-probe " + $0) }
+                print("[AIFS] graphcast-probe done")
+            }
+            return
+        }
+        if LaunchOptions.graphcastBench {
+            let name = LaunchOptions.graphcastDirectory
+            Task.detached(priority: .userInitiated) {
+                let dir = AppPaths.documents.appending(path: name, directoryHint: .isDirectory)
+                let logURL = dir.appending(path: "bench.log")
+                func log(_ line: String) {
+                    let stamped = "\(Date().formatted(.iso8601)) \(line)"
+                    print("[AIFS] graphcast " + stamped)
+                    if let h = try? FileHandle(forWritingTo: logURL) {
+                        h.seekToEndOfFile()
+                        h.write(Data((stamped + "\n").utf8))
+                        try? h.close()
+                    } else {
+                        try? Data((stamped + "\n").utf8).write(to: logURL)
+                    }
+                }
+                log("\(name): thermal \(ProcessInfo.processInfo.thermalState.rawValue)")
+                do {
+                    try GraphCastSelfTest.run(directory: dir, steps: 3, log: log)
                 } catch {
                     log("failed: \(error)")
                 }

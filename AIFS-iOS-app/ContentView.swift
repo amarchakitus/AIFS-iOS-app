@@ -119,7 +119,7 @@ struct ContentView: View {
                         Label("Download the model", systemImage: "arrow.down.circle")
                     }
                     .disabled(!ModelSource.isPublished(app.selectedModel))
-                    Text("\(app.selectedModel.title), about \(app.selectedModel == .aifs ? "1" : "1.3") GB from Hugging Face.")
+                    Text("\(app.selectedModel.title), about \(app.selectedModel.downloadSize) from Hugging Face.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -449,7 +449,11 @@ struct ModelTag: View {
     let model: ForecastModel
 
     var body: some View {
-        let tint: Color = model == .aurora ? .indigo : .teal
+        let tint: Color = switch model {
+        case .aifs: .teal
+        case .aurora: .indigo
+        case .graphcast: .pink
+        }
         Text(model.shortName)
             .font(.caption2.weight(.semibold))
             .padding(.horizontal, 6)

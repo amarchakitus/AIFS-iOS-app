@@ -54,6 +54,14 @@ nonisolated enum LaunchOptions {
     static var auroraGPUStages: Set<Int> { Set((value("--aurora-gpu") ?? "").split(separator: ",").compactMap { Int($0) }) }
     /// `--aurora-dir NAME`: the bundle's folder in Documents (default `aurora`).
     static var auroraDirectory: String { value("--aurora-dir") ?? "aurora" }
+    /// `--graphcast-bench`: run GraphCast's Neural Engine test case in Documents/graphcast (from
+    /// graphcast-ane's `ane_export` and `bundle --write-test`) and log time, memory and
+    /// accuracy; `--graphcast-dir NAME` for another folder.
+    static var graphcastBench: Bool { flag("--graphcast-bench") }
+    static var graphcastDirectory: String { value("--graphcast-dir") ?? "graphcast" }
+    /// `--graphcast-probe N`: compile each program in Documents/probe-grid N times (see
+    /// GraphCastProbe).
+    static var graphcastProbe: Int? { value("--graphcast-probe").flatMap { Int($0) } }
 
     private static var args: [String] { ProcessInfo.processInfo.arguments }
     private static func flag(_ name: String) -> Bool { args.contains(name) }

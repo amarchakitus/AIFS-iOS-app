@@ -292,6 +292,7 @@ nonisolated final class RendererCache: @unchecked Sendable {
         let r = switch model {
         case .aifs: try MapRenderer(bundle: AppPaths.bundle)
         case .aurora: MapRenderer(grid: DisplayGrid(regularRows: 720, cols: 1440))
+        case .graphcast: MapRenderer(grid: DisplayGrid(regularRows: 721, cols: 1440))
         }
         cached[model] = r
         return r

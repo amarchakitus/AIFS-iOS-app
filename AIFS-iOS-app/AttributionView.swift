@@ -28,6 +28,18 @@ struct AttributionView: View {
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 Link("Aurora 1.5 documentation", destination: URL(string: "https://microsoft.github.io/aurora/models.html#aurora-1-5-0-25")!)
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("GraphCast").font(.headline)
+                    Text("© Google DeepMind. The weights of GraphCast operational are licensed under CC BY 4.0. "
+                        + "This app converts them to Core ML programs and runs them on this device's Neural Engine.")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                    Text("Lam, R. et al. (2023). Learning skillful medium-range global weather forecasting. "
+                        + "Science 382, 1416–1421. doi:10.1126/science.adi2336. Trained on ECMWF's ERA5 and HRES data; "
+                        + "its land-sea mask and surface geopotential are ERA5's (modified Copernicus Climate Change "
+                        + "Service information). Neither the European Commission nor ECMWF is responsible for any use made of it.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+                Link("GraphCast on GitHub", destination: URL(string: "https://github.com/google-deepmind/weathernext")!)
             } header: {
                 Text("Forecast models")
             }
@@ -58,7 +70,7 @@ struct AttributionView: View {
 
             Section {
                 Text("Forecasts in this app are computed on this device. They are not produced, checked "
-                    + "or endorsed by ECMWF or Microsoft, and should not be relied on where safety is at stake.")
+                    + "or endorsed by ECMWF, Microsoft or Google, and should not be relied on where safety is at stake.")
                     .font(.subheadline).foregroundStyle(.secondary)
             } header: {
                 Text("Not an official forecast")
@@ -82,6 +94,7 @@ struct AttributionView: View {
 
     private static let software: [(name: String, licence: String, file: String)] = [
         ("Aurora", "MIT", "aurora"),
+        ("WeatherNext (GraphCast)", "Apache 2.0", "weathernext"),
         ("MLX Swift", "MIT", "mlx-swift"),
         ("MLX", "MIT", "mlx"),
         ("MLX C", "MIT", "mlx-c"),

@@ -11,6 +11,7 @@ let package = Package(
         .library(name: "AIFSKit", targets: ["AIFSKit"]),
         .executable(name: "aifs-mlx", targets: ["aifs-mlx"]),
         .executable(name: "aurora-ane", targets: ["aurora-ane"]),
+        .executable(name: "graphcast-ane", targets: ["graphcast-ane"]),
     ],
     dependencies: [
         .package(url: "https://github.com/ml-explore/mlx-swift", .upToNextMinor(from: "0.32.3")),
@@ -18,7 +19,7 @@ let package = Package(
     targets: [
         .target(
             name: "AIFSKit",
-            dependencies: ["CAEC", "AuroraANE", .product(name: "MLX", package: "mlx-swift")]
+            dependencies: ["CAEC", "AuroraANE", "GraphCastANE", .product(name: "MLX", package: "mlx-swift")]
         ),
         // Aurora 1.5 on the Neural Engine (Core ML and Accelerate only; no MLX), from the
         // programs aurora-1p5/aurora_1p5/ane_export.py writes.
@@ -27,6 +28,14 @@ let package = Package(
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         .executableTarget(name: "aurora-ane", dependencies: ["AuroraANE"]),
+        // GraphCast operational on the Neural Engine, from the programs
+        // graphcast-ane/graphcast_ane/ane_export.py writes (uses AuroraANE's safetensors reader).
+        .target(
+            name: "GraphCastANE",
+            dependencies: ["AuroraANE"],
+            swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
+        .executableTarget(name: "graphcast-ane", dependencies: ["GraphCastANE"]),
         // libaec's CCSDS decoder, for GRIB2 open data (grid_ccsds). See Sources/CAEC/README.md.
         .target(
             name: "CAEC",

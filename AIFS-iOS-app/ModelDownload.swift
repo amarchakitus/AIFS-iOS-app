@@ -3,13 +3,14 @@ import Foundation
 
 /// Where each model's bundle is published, as `local/publish_model.py` uploads it: for
 /// AIFS, the converted weights, graph, Core ML processor and regridding operators; for
-/// Aurora, its Core ML programs, tables and metadata. Pinned to one commit each, so a later
-/// upload can never hand an installed app a bundle it doesn't understand.
+/// Aurora and GraphCast, their Core ML programs, tables and metadata. Pinned to one commit
+/// each, so a later upload can never hand an installed app a bundle it doesn't understand.
 nonisolated enum ModelSource {
     static func repo(for model: ForecastModel) -> (repo: String, revision: String) {
         switch model {
         case .aifs: ("amarchakitus/aifs-single-v2-mlx", "ed19b8327b69a1027e6b5a26a6fad52f05d0e569")
         case .aurora: ("amarchakitus/aurora-1.5-coreml", "4cbc8ae79c074bf16f7ab2f57f74524e4f1a8dfa")
+        case .graphcast: ("amarchakitus/graphcast-operational-coreml", "ba7d5ec47c046aa0f9f56eb3521ded7a84354298")
         }
     }
 

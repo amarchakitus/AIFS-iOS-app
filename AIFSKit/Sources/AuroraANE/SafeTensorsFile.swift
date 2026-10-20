@@ -44,6 +44,10 @@ public final class SafeTensorsFile: @unchecked Sendable {
 
     deinit { munmap(base, length) }
 
+    /// The whole mapping (page-aligned, as mmap returns it) and its length: for wrapping in
+    /// a no-copy GPU buffer, with tensors at their `offset`s. Lives as long as this object.
+    public var mapping: (base: UnsafeRawPointer, length: Int) { (UnsafeRawPointer(base), length) }
+
     public func tensor(_ name: String) throws -> Tensor {
         guard let t = tensors[name] else {
             throw CocoaError(.fileReadCorruptFile, userInfo: [NSLocalizedDescriptionKey: "no tensor \(name)"])

@@ -1,6 +1,7 @@
 import AIFSKit
 import AuroraANE
 import Foundation
+import GraphCastANE
 import Observation
 import UIKit
 import os
@@ -125,9 +126,9 @@ final class AppModel {
                     .description ?? ""
                 manifestDescription = description.components(separatedBy: " (").first ?? description
             }
-        case .aurora:
-            modelState = AppPaths.isInstalled(.aurora) ? .ready : .missing
-            manifestDescription = ForecastModel.aurora.title
+        case .aurora, .graphcast:
+            modelState = AppPaths.isInstalled(selectedModel) ? .ready : .missing
+            manifestDescription = selectedModel.title
         }
     }
 
@@ -244,10 +245,15 @@ final class AppModel {
         errorMessage = nil
         // AIFS: a step peaks at ~3.1 GB of model memory plus the Core ML processor; the
         // weights themselves (~0.6 GB) are already counted once loaded. Aurora: ~2 GB at the
-        // peak, its programs streamed onto the Neural Engine. Refuse up front rather than
-        // have iOS end the app part-way through a step.
+        // peak, its programs streamed onto the Neural Engine. GraphCast: ~3.1 GB, its
+        // buffers and state. Refuse up front rather than have iOS end the app part-way
+        // through a step.
         let model = ic.model
-        let need = model == .aurora ? 2.5 : (engine.isModelLoaded ? 3.0 : 3.8)
+        let need = switch model {
+        case .aurora: 2.5
+        case .graphcast: 3.3
+        case .aifs: engine.isModelLoaded ? 3.0 : 3.8
+        }
         // On a Mac (the iPad app running there) there is no per-app memory cap and
         // os_proc_available_memory() means nothing; the machine's own memory is the limit.
         let free = ProcessInfo.processInfo.isiOSAppOnMac
@@ -416,6 +422,9 @@ nonisolated final class Engine: @unchecked Sendable {
         case .aurora:
             let client = try AuroraOpenData(bundle: AppPaths.auroraBundle)
             return await client.availableDates()
+        case .graphcast:
+            let client = try GraphCastOpenData(bundle: AppPaths.graphcastBundle)
+            return await client.availableDates()
         }
     }
 
@@ -425,6 +434,16 @@ nonisolated final class Engine: @unchecked Sendable {
             let client = try AuroraOpenData(bundle: AppPaths.auroraBundle)
             let date = if let date { date } else { try await client.latestDate() }
             let url = AppPaths.initialConditions.appending(path: AuroraOpenData.fileName(for: date))
+            if FileManager.default.fileExists(atPath: url.path) { return url }
+            let state = try await client.build(date: date, progress: progress)
+            try Task.checkCancellation()
+            try state.save(to: url)
+            return url
+        }
+        if model == .graphcast {
+            let client = try GraphCastOpenData(bundle: AppPaths.graphcastBundle)
+            let date = if let date { date } else { try await client.latestDate() }
+            let url = AppPaths.initialConditions.appending(path: GraphCastOpenData.fileName(for: date))
             if FileManager.default.fileExists(atPath: url.path) { return url }
             let state = try await client.build(date: date, progress: progress)
             try Task.checkCancellation()
@@ -445,6 +464,7 @@ nonisolated final class Engine: @unchecked Sendable {
 
     func forecast(icURL: URL, model kind: ForecastModel, steps: Int, report: @escaping @Sendable (Event) -> Void) async throws {
         if kind == .aurora { return try await auroraForecast(icURL: icURL, steps: steps, report: report) }
+        if kind == .graphcast { return try await graphcastForecast(icURL: icURL, steps: steps, report: report) }
         report(.progress(step: 1, phase: "Loading model", fraction: 0))
         let model = try loadedModel(compiling: Self.compileProgress(report))
         // Development tuning (Developer/LaunchOptions): speed and memory only.
@@ -591,6 +611,74 @@ nonisolated final class Engine: @unchecked Sendable {
             record.meta.peakMemoryBytes = max(record.meta.peakMemoryBytes, peak)
             record.meta.finished = s == steps
             try record.save()
+            report(.stepDone(step: s, seconds: seconds, peakBytes: peak))
+        }
+        forecaster.runtime.onProgress = nil
+    }
+
+    /// GraphCast (operational) from a state file: its programs on the Neural Engine, the CPU
+    /// moving data along the graphs between them; each step's fields written as Aurora's are,
+    /// on the 0.25-degree grid with both poles (721 x 1440).
+    private func graphcastForecast(icURL: URL, steps: Int, report: @escaping @Sendable (Event) -> Void) async throws {
+        report(.progress(step: 1, phase: "Loading model", fraction: 0))
+        let bundle = AppPaths.graphcastBundle
+        let state = try GraphCastState.load(icURL)
+        let forecaster = try GraphCastForecaster(directory: bundle, state: state)
+        // Only what it predicts: the viewer offers every field the forecast lists.
+        let stored = Array(Set(DisplayField.storedOutputs + ["sf"])).sorted().filter(GraphCastForecaster.predicts)
+        // Compiled for the Neural Engine on the first run, from the cache after.
+        try forecaster.runtime.prepare(progress: Self.compileProgress(report))
+        try Task.checkCancellation()
+
+        let dir = StoredForecast.directory(for: state.time, model: .graphcast)
+        try? FileManager.default.removeItem(at: dir)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        var record = StoredForecast(
+            url: dir,
+            meta: ForecastMeta(
+                initDate: state.time, stepHours: forecaster.stepHours, plannedSteps: steps,
+                completedSteps: 0, fields: stored, secondsPerStep: [], peakMemoryBytes: 0,
+                model: forecaster.metadata.model, finished: false, kind: .graphcast))
+        // Land-sea mask (coastlines) and surface geopotential (globe relief), north first.
+        let statics = try SafeTensorsFile(bundle.appending(path: "static.safetensors"))
+        try SafeTensorsWriter.write(record.staticURL, fields: [
+            "lsm": GraphCastForecaster.flip(try statics.pointer("land_sea_mask", as: Float.self)),
+            "z": GraphCastForecaster.flip(try statics.pointer("geopotential_at_surface", as: Float.self)),
+        ])
+        try record.save()
+        report(.started(dir))
+
+        for s in 1 ... steps {
+            RunGate.shared.pass()
+            try Task.checkCancellation()
+            forecaster.runtime.onProgress = { phase, fraction in
+                // Between Neural Engine calls: where a backgrounded run can safely wait.
+                RunGate.shared.pass()
+                // The phases' shares of a step's time.
+                let overall = switch phase {
+                case "encoder": 0.16 * fraction
+                case "processor": 0.16 + 0.46 * fraction
+                default: 0.62 + 0.38 * fraction
+                }
+                report(.progress(step: s, phase: phase, fraction: overall))
+            }
+            let t = ContinuousClock.now
+            let (date, fields) = try forecaster.advance(wanted: stored)
+            let elapsed = ContinuousClock.now - t
+            let seconds = Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) / 1e18
+            try SafeTensorsWriter.write(record.stepURL(s), metadata: ["valid": date.ISO8601Format()], fields: fields)
+            let peak = ProcessMemory.footprint().peak
+            record.meta.completedSteps = s
+            record.meta.secondsPerStep.append(seconds)
+            record.meta.peakMemoryBytes = max(record.meta.peakMemoryBytes, peak)
+            record.meta.finished = s == steps
+            try record.save()
+            #if DEVELOPER
+            print("[AIFS] graphcast " + forecaster.timings.sorted { $0.value > $1.value }
+                .map { String(format: "%@ %.2f", $0.key, $0.value) }.joined(separator: ", ") + "; "
+                + forecaster.runtime.timings.sorted { $0.value > $1.value }
+                .map { String(format: "%@ %.2f", $0.key, $0.value) }.joined(separator: ", "))
+            #endif
             report(.stepDone(step: s, seconds: seconds, peakBytes: peak))
         }
         forecaster.runtime.onProgress = nil
