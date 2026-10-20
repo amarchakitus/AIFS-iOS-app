@@ -117,6 +117,10 @@ extension AppModel {
             return
         }
         if let name = LaunchOptions.selectModel, let model = ForecastModel(rawValue: name) { selectedModel = model }
+        if LaunchOptions.deleteNewestIC, let ic = initialConditions.first {
+            print("[AIFS] deleting \(ic.model.shortName) \(StoredForecast.stamp(ic.date))")
+            delete(ic)
+        }
         if LaunchOptions.downloadLatest {
             print("[AIFS] autorun: downloading the latest \(selectedModel.title) cycle")
             downloadIC()

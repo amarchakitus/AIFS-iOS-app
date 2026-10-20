@@ -2,8 +2,8 @@ import AuroraANE
 import Foundation
 
 /// Aurora 1.5's initial state from ECMWF open data, as `aurora-1p5/aurora_1p5/batch.py`
-/// builds it: the IFS 0.25-degree analyses at the cycle and 6 h before, with two kinds of
-/// stand-in --
+/// builds it, its messages through the shared `OpenDataCache`: the IFS 0.25-degree analyses
+/// at the cycle and 6 h before, with two kinds of stand-in --
 ///
 /// - lcc, mcc, hcc (not in IFS open data): AIFS's step 0, which is the IFS analysis passed
 ///   through AIFS's grid (its total cloud cover matches the IFS analysis's to 0.07 RMS);
@@ -13,11 +13,7 @@ import Foundation
 /// model drops the south pole's), normalised, and stored as fp16.
 public final class AuroraOpenData: @unchecked Sendable {
     /// AWS first: ECMWF's own server rate-limits the many range requests a state needs.
-    public static let mirrors = [
-        OpenDataClient.Mirror(name: "aws", baseURL: URL(string: "https://ecmwf-forecasts.s3.eu-central-1.amazonaws.com")!),
-        OpenDataClient.Mirror(name: "ecmwf", baseURL: URL(string: "https://data.ecmwf.int/forecasts")!),
-        OpenDataClient.Mirror(name: "azure", baseURL: URL(string: "https://ai4edataeuwest.blob.core.windows.net/ecmwf")!),
-    ]
+    public static let mirrors = OpenDataCache.mirrors
     static let iceThicknessForFullCover: Float = 0.3  // m
 
     /// Where an input comes from: IFS (`ifs`) or AIFS (`aifs-single`), and which message.
@@ -31,14 +27,11 @@ public final class AuroraOpenData: @unchecked Sendable {
     let metadata: AuroraMetadata
     let mirrors: [OpenDataClient.Mirror]
     let session: URLSession
-    let maxConcurrent: Int
 
-    public init(bundle: URL, mirrors: [OpenDataClient.Mirror] = AuroraOpenData.mirrors, session: URLSession = .shared,
-                maxConcurrent: Int = 6) throws {
+    public init(bundle: URL, mirrors: [OpenDataClient.Mirror] = AuroraOpenData.mirrors, session: URLSession = .shared) throws {
         metadata = try AuroraMetadata.load(bundle)
         self.mirrors = mirrors
         self.session = session
-        self.maxConcurrent = maxConcurrent
     }
 
     static func source(ofInput name: String) -> Source? {
@@ -61,49 +54,13 @@ public final class AuroraOpenData: @unchecked Sendable {
         return surface + atmosphere
     }
 
-    // MARK: - Networking
-
-    func fileURL(_ mirror: OpenDataClient.Mirror, date: Date, model: String, ext: String) -> URL {
-        let s = OpenDataClient.stamp(date)
-        return mirror.baseURL.appending(path: "\(s.day)/\(s.hour)z/\(model)/0p25/oper/\(s.full)-0h-oper-fc.\(ext)")
-    }
-
-    private func get(_ request: URLRequest) async throws -> Data {
-        let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse, (200 ..< 300).contains(http.statusCode) else {
-            let code = (response as? HTTPURLResponse)?.statusCode ?? -1
-            throw URLError(.badServerResponse, userInfo: [NSLocalizedDescriptionKey: "HTTP \(code) for \(request.url!.absoluteString)"])
-        }
-        return data
-    }
-
-    private func withMirrors<T>(_ what: String, _ make: (OpenDataClient.Mirror) async throws -> T) async throws -> T {
-        var failures: [String] = []
-        for mirror in mirrors {
-            do { return try await make(mirror) } catch {
-                failures.append("\(mirror.name): \(error.localizedDescription)")
-            }
-        }
-        throw URLError(.resourceUnavailable, userInfo: [
-            NSLocalizedDescriptionKey: "Every mirror failed for \(what):\n" + failures.joined(separator: "\n"),
-        ])
-    }
-
-    private func index(date: Date, model: String) async throws -> [OpenDataClient.IndexEntry] {
-        let data = try await withMirrors("\(model) index") { mirror in
-            try await self.get(URLRequest(url: self.fileURL(mirror, date: date, model: model, ext: "index")))
-        }
-        let decoder = JSONDecoder()
-        return try String(decoding: data, as: UTF8.self).split(separator: "\n").map {
-            try decoder.decode(OpenDataClient.IndexEntry.self, from: Data($0.utf8))
-        }
-    }
+    // MARK: - Availability
 
     private func isPublished(_ date: Date) async -> Bool {
         for mirror in mirrors {
             var ok = true
             for model in ["ifs", "aifs-single"] {
-                var request = URLRequest(url: fileURL(mirror, date: date, model: model, ext: "index"))
+                var request = URLRequest(url: OpenDataCache.fileURL(mirror, date: date, model: model, stream: "oper", ext: "index"))
                 request.httpMethod = "HEAD"
                 if (try? await (session.data(for: request).1 as? HTTPURLResponse)?.statusCode) != 200 { ok = false; break }
             }
@@ -136,78 +93,40 @@ public final class AuroraOpenData: @unchecked Sendable {
 
     // MARK: - Build
 
-    /// Download and assemble the state for `date` (the later input time).
-    public func build(date: Date, progress: (@Sendable (OpenDataClient.Progress) -> Void)? = nil) async throws -> AuroraState {
-        let times = [date.addingTimeInterval(-6 * 3600), date]
-        let wanted = sources
+    /// The input times for the state at `date` (the later one).
+    static func times(_ date: Date) -> [Date] { [date.addingTimeInterval(-6 * 3600), date] }
+
+    func key(_ s: Source, _ time: Date) -> OpenDataCache.Key {
+        OpenDataCache.Key(model: s.model, stream: "oper", date: time, param: s.param, levtype: s.levtype, level: s.level)
+    }
+
+    /// Every open-data message the state at `date` is built from.
+    public func keys(date: Date) -> [OpenDataCache.Key] {
+        Self.times(date).flatMap { time in sources.map { key($0, time) } }.sorted()
+    }
+
+    /// Downloads into `cache` the messages for `date` it doesn't have yet.
+    public func download(date: Date, into cache: OpenDataCache, progress: (@Sendable (OpenDataClient.Progress) -> Void)? = nil) async throws {
+        try await cache.fetch(keys(date: date), progress: progress)
+    }
+
+    /// Assembles the state for `date` (the later input time) from the messages in `cache`.
+    public func build(date: Date, from cache: OpenDataCache) throws -> AuroraState {
+        let times = Self.times(date)
         let rows = metadata.grid.rows, cols = metadata.grid.cols
-
-        // Each file's messages, merged into runs of adjacent byte ranges: a few requests per
-        // file rather than one per field.
-        struct Piece: Sendable { let source: Source; let offset: Int; let length: Int }
-        struct Run: Sendable { let time: Int; let model: String; let start: Int; let end: Int; let pieces: [Piece] }
-        var runs: [Run] = []
-        for (t, time) in times.enumerated() {
-            for model in ["ifs", "aifs-single"] {
-                let entries = try await index(date: time, model: model)
-                var pieces: [Piece] = []
-                for s in wanted where s.model == model {
-                    guard let e = entries.first(where: { $0.param == s.param && $0.levtype == s.levtype && $0.levelist == s.level }) else {
-                        throw AIFSError.invalidInitialCondition(
-                            "\(model) open data for \(OpenDataClient.stamp(time).full) lacks \(s.param)\(s.level.map { " at \($0)" } ?? "")")
-                    }
-                    pieces.append(Piece(source: s, offset: e._offset, length: e._length))
-                }
-                pieces.sort { $0.offset < $1.offset }
-                var current: [Piece] = []
-                for p in pieces {
-                    if let last = current.last, last.offset + last.length != p.offset {
-                        runs.append(Run(time: t, model: model, start: current[0].offset, end: last.offset + last.length, pieces: current))
-                        current = []
-                    }
-                    current.append(p)
-                }
-                if let last = current.last {
-                    runs.append(Run(time: t, model: model, start: current[0].offset, end: last.offset + last.length, pieces: current))
-                }
-            }
-        }
-
         let state = AuroraState(time: date, rows: rows, cols: cols)
-        let total = runs.reduce(0) { $0 + $1.pieces.count }
-        var done = 0, bytes = 0
-        progress?(.init(completed: 0, total: total, bytes: 0, message: "Downloading \(total) fields"))
-
-        try await withThrowingTaskGroup(of: (Run, Data).self) { group in
-            var pending = runs[...]
-            func launch() {
-                guard let run = pending.popFirst() else { return }
-                group.addTask {
-                    let data = try await self.withMirrors("\(run.model) fields") { mirror in
-                        var request = URLRequest(url: self.fileURL(mirror, date: times[run.time], model: run.model, ext: "grib2"))
-                        request.setValue("bytes=\(run.start)-\(run.end - 1)", forHTTPHeaderField: "Range")
-                        let data = try await self.get(request)
-                        guard data.count == run.end - run.start else {
-                            throw URLError(.cannotParseResponse, userInfo: [NSLocalizedDescriptionKey: "range returned \(data.count) of \(run.end - run.start) bytes"])
-                        }
-                        return data
-                    }
-                    return (run, data)
-                }
-            }
-            for _ in 0 ..< maxConcurrent { launch() }
-            while let (run, data) = try await group.next() {
-                for p in run.pieces {
-                    let start = p.offset - run.start
-                    let field = try GRIB2.decode(data.subdata(in: start ..< start + p.length))
-                    try store(field, source: p.source, slot: run.time, into: state)
-                    done += 1
-                }
-                bytes += data.count
-                progress?(.init(completed: done, total: total, bytes: bytes, message: "\(run.model) \(OpenDataClient.stamp(times[run.time]).full)"))
-                launch()
+        let jobs = times.indices.flatMap { t in sources.map { (t, $0) } }
+        // Each message fills its own plane of the state: across the cores.
+        let failure = FirstFailure()
+        DispatchQueue.concurrentPerform(iterations: jobs.count) { j in
+            let (t, s) = jobs[j]
+            do {
+                try store(GRIB2.decode(cache.data(key(s, times[t]))), source: s, slot: t, into: state)
+            } catch {
+                failure.set(error)
             }
         }
+        if let error = failure.error { throw error }
 
         // Insolation, computed for both times.
         let insolation = metadata.inputs.firstIndex(of: "insolation")!

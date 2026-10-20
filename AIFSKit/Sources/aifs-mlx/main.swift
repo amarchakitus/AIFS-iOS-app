@@ -18,10 +18,12 @@ func usage() -> Never {
         usage: aifs-mlx --bundle DIR --ic FILE [--steps N] [--out DIR] [--dtype float16|float32]
                         [--render DIR]   (PNG of every display field, every step)
                aifs-mlx --bundle DIR --fetch-ic latest|YYYYMMDDTHH --out DIR
-               aifs-mlx --bundle AURORA_DIR --aurora-ic YYYYMMDDTHH
+               aifs-mlx --bundle AURORA_DIR --aurora-ic YYYYMMDDTHH --out DIR
                aifs-mlx --bundle GRAPHCAST_DIR --graphcast-ic YYYYMMDDTHH --out DIR
                aifs-mlx --bundle GRAPHCAST_DIR --graphcast-forecast STATE --steps N
                         (scored against the IFS analyses at each valid time)
+        Open-data messages go through a shared cache, --cache DIR (default: in the temporary
+        folder), as the app's do: each is downloaded once, whichever command needs it first.
         """)
     exit(2)
 }
@@ -33,6 +35,19 @@ while let flag = argv.popFirst() {
     options[String(flag.dropFirst(2))] = value
 }
 guard let bundle = options["bundle"] else { usage() }
+
+/// The open-data messages every command shares.
+let cache = OpenDataCache(root: options["cache"].map { URL(filePath: $0) }
+    ?? FileManager.default.temporaryDirectory.appending(path: "aifs-opendata-cache"))
+
+/// Downloads `keys` (only those not yet in the cache), reporting every 40th field.
+func fetch(_ keys: [OpenDataCache.Key]) async throws {
+    let before = keys.filter(cache.contains).count
+    try await cache.fetch(keys) { p in
+        if p.completed % 40 == 0 || p.completed == p.total { print("  \(p.completed)/\(p.total) fields, \(p.bytes / 1_000_000) MB") }
+    }
+    print("  \(keys.count) messages, \(before) already cached, \(keys.count - before) downloaded")
+}
 
 let cycleFormat: DateFormatter = {
     let f = DateFormatter()
@@ -46,9 +61,9 @@ if let which = options["graphcast-ic"] {
     guard let date = cycleFormat.date(from: which), let out = options["out"] else { usage() }
     do {
         let t = Date()
-        let state = try await GraphCastOpenData(bundle: URL(filePath: bundle)).build(date: date) { p in
-            if p.completed % 40 == 0 { print("  \(p.completed)/\(p.total) fields, \(p.bytes / 1_000_000) MB") }
-        }
+        let client = try GraphCastOpenData(bundle: URL(filePath: bundle))
+        try await fetch(client.keys(date: date))
+        let state = try client.build(date: date, from: cache)
         let url = URL(filePath: out).appending(path: GraphCastOpenData.fileName(for: date))
         try FileManager.default.createDirectory(at: URL(filePath: out), withIntermediateDirectories: true)
         try state.save(to: url)
@@ -76,7 +91,8 @@ if let path = options["graphcast-forecast"] {
             let t = Date()
             let (valid, fields) = try fc.advance(wanted: names + ["tp"])
             let took = Date().timeIntervalSince(t)
-            let truth = try await data.build(date: valid)
+            try await fetch(data.keys(date: valid))
+            let truth = try data.build(date: valid, from: cache)
             let tf = try GraphCastForecaster.northFirst(truth, names)
             var line = String(format: "step %d (+%dh, %@) in %.1f s:", s, Int(valid.timeIntervalSince(initial) / 3600),
                               cycleFormat.string(from: valid), took)
@@ -117,13 +133,14 @@ if let which = options["aurora-ic"] {
     guard let date = f.date(from: which) else { usage() }
     do {
         let dir = URL(filePath: bundle)
+        guard let out = options["out"] else { usage() }  // never the bundle: that gets published
         let client = try AuroraOpenData(bundle: dir)
         let t = ContinuousClock.now
-        let state = try await client.build(date: date) { p in
-            if p.completed == p.total || p.completed % 40 == 0 { print("  \(p.completed)/\(p.total) fields, \(p.bytes / 1_000_000) MB") }
-        }
+        try await fetch(client.keys(date: date))
+        let state = try client.build(date: date, from: cache)
         print("built in \(ContinuousClock.now - t)")
-        let url = dir.appending(path: AuroraOpenData.fileName(for: date))
+        try FileManager.default.createDirectory(at: URL(filePath: out), withIntermediateDirectories: true)
+        let url = URL(filePath: out).appending(path: AuroraOpenData.fileName(for: date))
         try state.save(to: url)
         let reference = try AuroraState.load(dir.appending(path: "test_input.safetensors"))
         if reference.time == date {
@@ -169,11 +186,8 @@ if let which = options["fetch-ic"] {
             date = d
         }
         let t = ContinuousClock.now
-        let ic = try await client.build(date: date) { p in
-            if p.completed % 20 == 0 || p.completed == p.total {
-                print("  \(p.completed)/\(p.total) fields, \(p.bytes / 1_000_000) MB")
-            }
-        }
+        try await fetch(client.keys(date: date))
+        let ic = try client.build(date: date, from: cache)
         let url = URL(filePath: out).appending(path: InitialCondition.fileName(for: date))
         try FileManager.default.createDirectory(at: URL(filePath: out), withIntermediateDirectories: true)
         try ic.save(to: url)

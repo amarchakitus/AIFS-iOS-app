@@ -27,6 +27,9 @@ nonisolated enum LaunchOptions {
     static var removeDocuments: [String] { (value("--remove-documents") ?? "").split(separator: ",").map(String.init) }
     /// `--select-model aifs|aurora`: the model to start with.
     static var selectModel: String? { value("--select-model") }
+    /// `--delete-newest-ic`: delete the selected model's newest initial condition (tests the
+    /// shared cache's bookkeeping).
+    static var deleteNewestIC: Bool { flag("--delete-newest-ic") }
     /// `--download-latest`: fetch the newest cycle for the selected model, then run
     /// `--autorun-steps` steps from it, if given.
     static var downloadLatest: Bool { flag("--download-latest") }

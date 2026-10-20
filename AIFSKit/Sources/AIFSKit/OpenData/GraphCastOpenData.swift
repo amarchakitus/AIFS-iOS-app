@@ -1,8 +1,8 @@
 import Foundation
 import GraphCastANE
 
-/// GraphCast operational's initial state from ECMWF open data: the IFS 0.25-degree analyses
-/// at the cycle and 6 h before (the HRES analyses Google fine-tuned it on), every field rolled
+/// GraphCast operational's initial state from ECMWF open data, its messages through the
+/// shared `OpenDataCache`: the IFS 0.25-degree analyses at the cycle and 6 h before (the HRES analyses Google fine-tuned it on), every field rolled
 /// to start at 0 E and flipped to start at the south pole, as GraphCast's grid does. The
 /// earlier time is stored normalised (fp16), the later in physical units (see GraphCastState).
 public final class GraphCastOpenData: @unchecked Sendable {
@@ -15,14 +15,11 @@ public final class GraphCastOpenData: @unchecked Sendable {
     let metadata: GraphCastRuntime.Metadata
     let mirrors: [OpenDataClient.Mirror]
     let session: URLSession
-    let maxConcurrent: Int
 
-    public init(bundle: URL, mirrors: [OpenDataClient.Mirror] = AuroraOpenData.mirrors, session: URLSession = .shared,
-                maxConcurrent: Int = 6) throws {
+    public init(bundle: URL, mirrors: [OpenDataClient.Mirror] = OpenDataCache.mirrors, session: URLSession = .shared) throws {
         metadata = try GraphCastRuntime.Metadata.load(bundle)
         self.mirrors = mirrors
         self.session = session
-        self.maxConcurrent = maxConcurrent
     }
 
     /// IFS's message for a state variable (`variable` or `variable:level`).
@@ -37,47 +34,11 @@ public final class GraphCastOpenData: @unchecked Sendable {
         return nil
     }
 
-    // MARK: - Networking
-
-    func fileURL(_ mirror: OpenDataClient.Mirror, date: Date, ext: String) -> URL {
-        let s = OpenDataClient.stamp(date)
-        return mirror.baseURL.appending(path: "\(s.day)/\(s.hour)z/ifs/0p25/oper/\(s.full)-0h-oper-fc.\(ext)")
-    }
-
-    private func get(_ request: URLRequest) async throws -> Data {
-        let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse, (200 ..< 300).contains(http.statusCode) else {
-            let code = (response as? HTTPURLResponse)?.statusCode ?? -1
-            throw URLError(.badServerResponse, userInfo: [NSLocalizedDescriptionKey: "HTTP \(code) for \(request.url!.absoluteString)"])
-        }
-        return data
-    }
-
-    private func withMirrors<T>(_ what: String, _ make: (OpenDataClient.Mirror) async throws -> T) async throws -> T {
-        var failures: [String] = []
-        for mirror in mirrors {
-            do { return try await make(mirror) } catch {
-                failures.append("\(mirror.name): \(error.localizedDescription)")
-            }
-        }
-        throw URLError(.resourceUnavailable, userInfo: [
-            NSLocalizedDescriptionKey: "Every mirror failed for \(what):\n" + failures.joined(separator: "\n"),
-        ])
-    }
-
-    private func index(date: Date) async throws -> [OpenDataClient.IndexEntry] {
-        let data = try await withMirrors("IFS index") { mirror in
-            try await self.get(URLRequest(url: self.fileURL(mirror, date: date, ext: "index")))
-        }
-        let decoder = JSONDecoder()
-        return try String(decoding: data, as: UTF8.self).split(separator: "\n").map {
-            try decoder.decode(OpenDataClient.IndexEntry.self, from: Data($0.utf8))
-        }
-    }
+    // MARK: - Availability
 
     private func isPublished(_ date: Date) async -> Bool {
         for mirror in mirrors {
-            var request = URLRequest(url: fileURL(mirror, date: date, ext: "index"))
+            var request = URLRequest(url: OpenDataCache.fileURL(mirror, date: date, model: "ifs", stream: "oper", ext: "index"))
             request.httpMethod = "HEAD"
             if (try? await (session.data(for: request).1 as? HTTPURLResponse)?.statusCode) == 200 { return true }
         }
@@ -108,78 +69,48 @@ public final class GraphCastOpenData: @unchecked Sendable {
 
     // MARK: - Build
 
-    /// Download and assemble the state for `date` (the later input time).
-    public func build(date: Date, progress: (@Sendable (OpenDataClient.Progress) -> Void)? = nil) async throws -> GraphCastState {
-        let times = [date.addingTimeInterval(-6 * 3600), date]
-        let keys = metadata.stateVariables
-        let sources = try keys.map { key in
+    /// The input times for the state at `date` (the later one).
+    static func times(_ date: Date) -> [Date] { [date.addingTimeInterval(-6 * 3600), date] }
+
+    /// Each state variable's message, in the state's order.
+    func sources() throws -> [Source] {
+        try metadata.stateVariables.map { key in
             guard let s = Self.source(of: key) else { throw AIFSError.invalidInitialCondition("no open-data source for \(key)") }
             return s
         }
+    }
 
-        // Each file's messages, merged into runs of adjacent byte ranges.
-        struct Piece: Sendable { let variable: Int; let offset: Int; let length: Int }
-        struct Run: Sendable { let time: Int; let start: Int; let end: Int; let pieces: [Piece] }
-        var runs: [Run] = []
-        for (t, time) in times.enumerated() {
-            let entries = try await index(date: time)
-            var pieces: [Piece] = []
-            for (v, s) in sources.enumerated() {
-                guard let e = entries.first(where: { $0.param == s.param && $0.levtype == s.levtype && $0.levelist == s.level }) else {
-                    throw AIFSError.invalidInitialCondition(
-                        "IFS open data for \(OpenDataClient.stamp(time).full) lacks \(s.param)\(s.level.map { " at \($0)" } ?? "")")
-                }
-                pieces.append(Piece(variable: v, offset: e._offset, length: e._length))
-            }
-            pieces.sort { $0.offset < $1.offset }
-            var current: [Piece] = []
-            for p in pieces {
-                if let last = current.last, last.offset + last.length != p.offset {
-                    runs.append(Run(time: t, start: current[0].offset, end: last.offset + last.length, pieces: current))
-                    current = []
-                }
-                current.append(p)
-            }
-            if let last = current.last {
-                runs.append(Run(time: t, start: current[0].offset, end: last.offset + last.length, pieces: current))
+    func key(_ s: Source, _ time: Date) -> OpenDataCache.Key {
+        OpenDataCache.Key(model: "ifs", stream: "oper", date: time, param: s.param, levtype: s.levtype, level: s.level)
+    }
+
+    /// Every open-data message the state at `date` is built from.
+    public func keys(date: Date) throws -> [OpenDataCache.Key] {
+        let sources = try sources()
+        return Self.times(date).flatMap { time in sources.map { key($0, time) } }.sorted()
+    }
+
+    /// Downloads into `cache` the messages for `date` it doesn't have yet.
+    public func download(date: Date, into cache: OpenDataCache, progress: (@Sendable (OpenDataClient.Progress) -> Void)? = nil) async throws {
+        try await cache.fetch(keys(date: date), progress: progress)
+    }
+
+    /// Assembles the state for `date` (the later input time) from the messages in `cache`.
+    public func build(date: Date, from cache: OpenDataCache) throws -> GraphCastState {
+        let times = Self.times(date), sources = try sources()
+        let state = GraphCastState(time: date, variables: metadata.stateVariables)
+        let jobs = times.indices.flatMap { t in sources.indices.map { (t, $0) } }
+        // Each message fills its own plane of the state: across the cores.
+        let failure = FirstFailure()
+        DispatchQueue.concurrentPerform(iterations: jobs.count) { j in
+            let (t, v) = jobs[j]
+            do {
+                try store(GRIB2.decode(cache.data(key(sources[v], times[t]))), variable: v, slot: t, into: state)
+            } catch {
+                failure.set(error)
             }
         }
-
-        let state = GraphCastState(time: date, variables: keys)
-        let total = runs.reduce(0) { $0 + $1.pieces.count }
-        var done = 0, bytes = 0
-        progress?(.init(completed: 0, total: total, bytes: 0, message: "Downloading \(total) fields"))
-
-        try await withThrowingTaskGroup(of: (Run, Data).self) { group in
-            var pending = runs[...]
-            func launch() {
-                guard let run = pending.popFirst() else { return }
-                group.addTask {
-                    let data = try await self.withMirrors("IFS fields") { mirror in
-                        var request = URLRequest(url: self.fileURL(mirror, date: times[run.time], ext: "grib2"))
-                        request.setValue("bytes=\(run.start)-\(run.end - 1)", forHTTPHeaderField: "Range")
-                        let data = try await self.get(request)
-                        guard data.count == run.end - run.start else {
-                            throw URLError(.cannotParseResponse, userInfo: [NSLocalizedDescriptionKey: "range returned \(data.count) of \(run.end - run.start) bytes"])
-                        }
-                        return data
-                    }
-                    return (run, data)
-                }
-            }
-            for _ in 0 ..< maxConcurrent { launch() }
-            while let (run, data) = try await group.next() {
-                for p in run.pieces {
-                    let start = p.offset - run.start
-                    let field = try GRIB2.decode(data.subdata(in: start ..< start + p.length))
-                    try store(field, variable: p.variable, slot: run.time, into: state)
-                    done += 1
-                }
-                bytes += data.count
-                progress?(.init(completed: done, total: total, bytes: bytes, message: "IFS \(OpenDataClient.stamp(times[run.time]).full)"))
-                launch()
-            }
-        }
+        if let error = failure.error { throw error }
         return state
     }
 

@@ -5,10 +5,11 @@ import MLX
 /// `aifs-mps/aifs_mps/opendata.py::build_input_state`, restricted to the fields the bundle's
 /// model reads (`manifest.stateVars`), so nothing unused is downloaded.
 ///
-/// Per input time: fetch the `.index` of the `oper` and `wave` step-0 files, then each
-/// needed message by HTTP range, decode it (GRIB2/CCSDS), roll it to 0..360 E, regrid it
-/// to N320 with the same operator the Python pipeline uses, and apply the same
-/// transformations (mwd -> cos/sin, soil renames, gh -> z, land-only fields NaN at sea).
+/// The needed messages of both input times' `oper` and `wave` step-0 files come through the
+/// shared `OpenDataCache` (downloaded once, whichever model asks first). Each is decoded
+/// (GRIB2/CCSDS), rolled to 0..360 E, regridded to N320 with the same operator the Python
+/// pipeline uses, and given the same transformations (mwd -> cos/sin, soil renames,
+/// gh -> z, land-only fields NaN at sea).
 public final class OpenDataClient: @unchecked Sendable {
     public struct Mirror: Sendable, Hashable {
         public let name: String
@@ -35,19 +36,17 @@ public final class OpenDataClient: @unchecked Sendable {
     let manifest: Manifest
     let mirrors: [Mirror]
     let session: URLSession
-    let maxConcurrent: Int
     private let regrid: SparseOperator
     private let sea: [Bool]
 
     /// `bundle` must contain `opendata.safetensors` (see `tools/bundle/export.py`).
     public init(
         bundle: URL, manifest: Manifest, mirrors: [Mirror] = OpenDataClient.defaultMirrors,
-        session: URLSession = .shared, maxConcurrent: Int = 6
+        session: URLSession = .shared
     ) throws {
         self.manifest = manifest
         self.mirrors = mirrors
         self.session = session
-        self.maxConcurrent = maxConcurrent
         // Read without MLX: the client also serves the cycle list, which has no business
         // starting a Metal device (and the simulator cannot).
         let (data, tensors, metadata) = try SafeTensors.open(bundle.appending(path: "opendata.safetensors"))
@@ -125,33 +124,7 @@ public final class OpenDataClient: @unchecked Sendable {
     }
 
     func fileURL(_ mirror: Mirror, date: Date, stream: String, ext: String) -> URL {
-        let s = Self.stamp(date)
-        return mirror.baseURL.appending(
-            path: "\(s.day)/\(s.hour)z/ifs/0p25/\(stream)/\(s.full)-0h-\(stream)-fc.\(ext)")
-    }
-
-    // MARK: - Networking
-
-    private func get(_ request: URLRequest) async throws -> Data {
-        let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse, (200 ..< 300).contains(http.statusCode) else {
-            let code = (response as? HTTPURLResponse)?.statusCode ?? -1
-            throw URLError(.badServerResponse, userInfo: [NSLocalizedDescriptionKey: "HTTP \(code) for \(request.url!.absoluteString)"])
-        }
-        return data
-    }
-
-    /// `make(mirror)` against each mirror in turn until one succeeds.
-    private func withMirrors<T>(_ what: String, _ make: (Mirror) async throws -> T) async throws -> T {
-        var failures: [String] = []
-        for mirror in mirrors {
-            do { return try await make(mirror) } catch {
-                failures.append("\(mirror.name): \(error.localizedDescription)")
-            }
-        }
-        throw URLError(
-            .resourceUnavailable,
-            userInfo: [NSLocalizedDescriptionKey: "Every mirror failed for \(what):\n" + failures.joined(separator: "\n")])
+        OpenDataCache.fileURL(mirror, date: date, model: "ifs", stream: stream, ext: ext)
     }
 
     struct IndexEntry: Decodable {
@@ -160,16 +133,6 @@ public final class OpenDataClient: @unchecked Sendable {
         let levelist: String?
         let _offset: Int
         let _length: Int
-    }
-
-    private func index(date: Date, stream: String) async throws -> [IndexEntry] {
-        let data = try await withMirrors("\(stream) index") { mirror in
-            try await self.get(URLRequest(url: self.fileURL(mirror, date: date, stream: stream, ext: "index")))
-        }
-        let decoder = JSONDecoder()
-        return try String(decoding: data, as: UTF8.self).split(separator: "\n").map {
-            try decoder.decode(IndexEntry.self, from: Data($0.utf8))
-        }
     }
 
     /// Most recent cycle whose step-0 files (both streams), and those of the cycle before
@@ -219,64 +182,55 @@ public final class OpenDataClient: @unchecked Sendable {
 
     // MARK: - Build
 
-    /// Download and assemble the initial condition for `date` (the latest input time).
-    public func build(
-        date: Date, progress: (@Sendable (Progress) -> Void)? = nil
-    ) async throws -> InitialCondition {
+    /// The model's input times for the initial condition at `date` (the latest).
+    static func times(_ date: Date, manifest: Manifest) -> [Date] {
         let dt = TimeInterval(manifest.timestepHours * 3600)
-        let times = (0 ..< manifest.multiStep).map { date.addingTimeInterval(dt * Double($0 - manifest.multiStep + 1)) }
-        let names = manifest.stateVars
-        let messages = Array(Set(names.map(Self.source)))
+        return (0 ..< manifest.multiStep).map { date.addingTimeInterval(dt * Double($0 - manifest.multiStep + 1)) }
+    }
 
-        // Locate every message in each time's indexes.
-        struct Job: Sendable { let time: Int; let message: Message; let offset: Int; let length: Int }
-        var jobs: [Job] = []
-        for (t, time) in times.enumerated() {
-            for stream in ["oper", "wave"] {
-                let entries = try await index(date: time, stream: stream)
-                for m in messages where m.stream == stream {
-                    guard let e = entries.first(where: {
-                        $0.param == m.param && $0.levtype == m.levtype && $0.levelist == m.level
-                    }) else {
-                        throw AIFSError.invalidInitialCondition(
-                            "open data for \(Self.stamp(time).full) lacks \(m.param)\(m.level.map { " at \($0)" } ?? "")")
-                    }
-                    jobs.append(Job(time: t, message: m, offset: e._offset, length: e._length))
+    func times(_ date: Date) -> [Date] { Self.times(date, manifest: manifest) }
+
+    /// Every open-data message the initial condition at `date` is built from (from the
+    /// manifest alone: no need to load the regridding operator to ask).
+    public static func keys(date: Date, manifest: Manifest) -> [OpenDataCache.Key] {
+        let messages = Set(manifest.stateVars.map(source))
+        return times(date, manifest: manifest).flatMap { time in
+            messages.map { OpenDataCache.Key(model: "ifs", stream: $0.stream, date: time, param: $0.param, levtype: $0.levtype, level: $0.level) }
+        }.sorted()
+    }
+
+    public func keys(date: Date) -> [OpenDataCache.Key] { Self.keys(date: date, manifest: manifest) }
+
+    /// Downloads into `cache` the messages for `date` it doesn't have yet.
+    public func download(date: Date, into cache: OpenDataCache, progress: (@Sendable (Progress) -> Void)? = nil) async throws {
+        try await cache.fetch(keys(date: date), progress: progress)
+    }
+
+    /// Assembles the initial condition for `date` (the latest input time) from the messages in
+    /// `cache`: each decoded, rolled to 0 E and regridded to N320, then transformed.
+    public func build(date: Date, from cache: OpenDataCache) throws -> InitialCondition {
+        let times = times(date), names = manifest.stateVars, n = manifest.numDataNodes
+        let messages = Array(Set(names.map(Self.source)))
+        let jobs = times.indices.flatMap { t in messages.map { (t, $0) } }
+        // Decoding and regridding are independent per message: across the cores.
+        var results = [[Double]?](repeating: nil, count: jobs.count)
+        let failure = FirstFailure()
+        results.withUnsafeMutableBufferPointer { out in
+            let out = UnsafeSendablePointer(out.baseAddress!)
+            DispatchQueue.concurrentPerform(iterations: jobs.count) { j in
+                let (t, m) = jobs[j]
+                do {
+                    let key = OpenDataCache.Key(model: "ifs", stream: m.stream, date: times[t], param: m.param, levtype: m.levtype, level: m.level)
+                    out.value[j] = try self.toN320(GRIB2.decode(cache.data(key)))
+                } catch {
+                    failure.set(error)
                 }
             }
         }
-
-        let total = jobs.count, n = manifest.numDataNodes
+        if let error = failure.error { throw error }
         var regridded: [Message: [[Double]]] = [:]
-        var done = 0, bytes = 0
-        progress?(Progress(completed: 0, total: total, bytes: 0, message: "Downloading \(total) fields"))
-
-        try await withThrowingTaskGroup(of: (Job, [Double], Int).self) { group in
-            var pending = jobs[...]
-            func launch() {
-                guard let job = pending.popFirst() else { return }
-                group.addTask {
-                    let data = try await self.withMirrors(job.message.param) { mirror in
-                        var request = URLRequest(url: self.fileURL(mirror, date: times[job.time], stream: job.message.stream, ext: "grib2"))
-                        request.setValue("bytes=\(job.offset)-\(job.offset + job.length - 1)", forHTTPHeaderField: "Range")
-                        let data = try await self.get(request)
-                        guard data.count == job.length else {
-                            throw URLError(.cannotParseResponse, userInfo: [NSLocalizedDescriptionKey: "range returned \(data.count) of \(job.length) bytes"])
-                        }
-                        return data
-                    }
-                    let field = try GRIB2.decode(data)
-                    return (job, try self.toN320(field), data.count)
-                }
-            }
-            for _ in 0 ..< maxConcurrent { launch() }
-            while let (job, values, size) = try await group.next() {
-                regridded[job.message, default: Array(repeating: [], count: times.count)][job.time] = values
-                done += 1
-                bytes += size
-                progress?(Progress(completed: done, total: total, bytes: bytes, message: "\(job.message.param) \(Self.stamp(times[job.time]).full)"))
-                launch()
-            }
+        for (j, (t, m)) in jobs.enumerated() {
+            regridded[m, default: Array(repeating: [], count: times.count)][t] = results[j]!
         }
 
         var fields: [String: MLXArray] = [:]
@@ -365,4 +319,18 @@ extension InitialCondition {
     public static func fileName(for date: Date) -> String {
         "ic_\(OpenDataClient.stamp(date).day)T\(OpenDataClient.stamp(date).hour).safetensors"
     }
+}
+
+/// The first error any of several threads hit.
+final class FirstFailure: @unchecked Sendable {
+    private var stored: Error?
+    private let lock = NSLock()
+    var error: Error? { lock.lock(); defer { lock.unlock() }; return stored }
+    func set(_ e: Error) { lock.lock(); if stored == nil { stored = e }; lock.unlock() }
+}
+
+/// A pointer shared across threads that each write their own elements.
+struct UnsafeSendablePointer<T>: @unchecked Sendable {
+    let value: UnsafeMutablePointer<T>
+    init(_ value: UnsafeMutablePointer<T>) { self.value = value }
 }

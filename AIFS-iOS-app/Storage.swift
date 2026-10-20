@@ -49,9 +49,11 @@ nonisolated enum ForecastModel: String, Codable, CaseIterable, Identifiable, Sen
 ///     Documents/aifs-single-v2/        AIFS bundle (`tools/bundle/aifs-export bundle`, or downloaded)
 ///     Documents/aurora-1.5/            Aurora bundle (aurora-1p5's `ane_export --weights int8`)
 ///     Documents/graphcast-operational/ GraphCast bundle (graphcast-ane's `ane_export` and `bundle`)
-///     Documents/ic/ic_<date>.safetensors         AIFS initial conditions
-///     Documents/ic/aurora_<date>.safetensors     Aurora initial states
-///     Documents/ic/graphcast_<date>.safetensors  GraphCast initial states
+///     Documents/opendata/                open-data messages every model's initial conditions
+///                                      are built from, each stored once (OpenDataCache)
+///     Documents/ic/ic_<date>.safetensors         AIFS initial conditions (from before the
+///     Documents/ic/aurora_<date>.safetensors     shared cache, or copied in), and Aurora's
+///     Documents/ic/graphcast_<date>.safetensors  and GraphCast's states
 ///     Documents/forecasts/<init>/      one directory per forecast run (`aurora_<date>` for Aurora,
 ///                                      `graphcast_<date>` for GraphCast)
 nonisolated enum AppPaths {
@@ -82,15 +84,16 @@ nonisolated enum AppPaths {
         }
     }
     static var initialConditions: URL { documents.appending(path: "ic", directoryHint: .isDirectory) }
+    static var openData: URL { documents.appending(path: "opendata", directoryHint: .isDirectory) }
     static var forecasts: URL { documents.appending(path: "forecasts", directoryHint: .isDirectory) }
 
     static func ensureDirectories() {
-        for url in [initialConditions, forecasts] {
+        for url in [initialConditions, openData, forecasts] {
             try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         }
         // Out of iCloud backups: the model and initial conditions download again, and a
         // forecast reruns from them -- and between them they run to gigabytes.
-        for url in [bundle, auroraBundle, graphcastBundle, initialConditions, forecasts] { excludeFromBackup(url) }
+        for url in [bundle, auroraBundle, graphcastBundle, initialConditions, openData, forecasts] { excludeFromBackup(url) }
         // A model download stopped part-way leaves its staging folder; once a model is in
         // place (copied in, or finished another time) the leftovers are dead weight.
         for model in ForecastModel.allCases where isInstalled(model) {
@@ -113,34 +116,6 @@ nonisolated enum AppPaths {
 
     static var bundleIsPresent: Bool {
         FileManager.default.fileExists(atPath: bundle.appending(path: "manifest.json").path)
-    }
-}
-
-/// An initial-condition file on disk.
-nonisolated struct ICFile: Identifiable, Hashable, Sendable {
-    let url: URL
-    let date: Date
-    let bytes: Int
-    var id: URL { url }
-    /// Aurora states are `aurora_<date>`, GraphCast's `graphcast_<date>`, AIFS initial
-    /// conditions `ic_<date>`.
-    var model: ForecastModel {
-        let name = url.lastPathComponent
-        return name.hasPrefix("aurora_") ? .aurora : name.hasPrefix("graphcast_") ? .graphcast : .aifs
-    }
-
-    static func list() -> [ICFile] {
-        let urls = (try? FileManager.default.contentsOfDirectory(
-            at: AppPaths.initialConditions, includingPropertiesForKeys: [.fileSizeKey])) ?? []
-        return urls.filter { url in
-            ["ic_", "aurora_", "graphcast_"].contains { url.lastPathComponent.hasPrefix($0) } && url.pathExtension == "safetensors"
-        }
-            .compactMap { url in
-                guard let date = InitialCondition.peekDate(url) else { return nil }
-                let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
-                return ICFile(url: url, date: date, bytes: size)
-            }
-            .sorted { $0.date > $1.date }
     }
 }
 

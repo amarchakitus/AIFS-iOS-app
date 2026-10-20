@@ -84,7 +84,7 @@ final class AppModel {
     /// iPad, where the list stays visible beside it; on iPhone it would hide the progress).
     var startedForecastID: URL?
     /// Set when "Download latest" finishes; the view selects it as the run's input.
-    var downloadedICID: URL?
+    var downloadedICID: String?
     var thermalState = ProcessInfo.processInfo.thermalState
     /// Hot enough that iOS is, or soon will be, slowing the device down.
     var isHot: Bool { thermalState == .serious || thermalState == .critical }
@@ -104,6 +104,7 @@ final class AppModel {
         #endif
         AppPaths.ensureDirectories()
         refresh()
+        Task.detached(priority: .utility) { InitialConditionStore.pruneStale() }
         NotificationCenter.default.addObserver(
             forName: ProcessInfo.thermalStateDidChangeNotification, object: nil, queue: .main
         ) { [weak self] _ in
@@ -112,7 +113,7 @@ final class AppModel {
     }
 
     func refresh() {
-        initialConditions = ICFile.list().filter { $0.model == selectedModel }
+        initialConditions = InitialConditionStore.list(selectedModel)
         forecasts = StoredForecast.list()
         switch selectedModel {
         case .aifs:
@@ -173,18 +174,15 @@ final class AppModel {
         downloadTask = Task {
             do {
                 // Detached work doesn't inherit cancellation; pass Cancel on to it.
-                let url = try await withTaskCancellationHandler {
+                let date = try await withTaskCancellationHandler {
                     try await work.value
                 } onCancel: {
                     work.cancel()
                 }
                 download = nil
                 refresh()
-                // Select what was just fetched (or found already on disk). Match by file name:
-                // the listing's URL for the same file need not compare equal.
-                downloadedICID = initialConditions.first {
-                    $0.url.lastPathComponent == url.lastPathComponent
-                }?.id
+                // Select what was just fetched (or found already on disk).
+                downloadedICID = initialConditions.first { $0.date == date }?.id
             } catch is CancellationError {
                 errorMessage = nil
             } catch where (error as? URLError)?.code == .cancelled {
@@ -234,7 +232,7 @@ final class AppModel {
     func cancelModelDownload() { modelTask?.cancel() }
 
     func delete(_ ic: ICFile) {
-        try? FileManager.default.removeItem(at: ic.url)
+        InitialConditionStore.delete(ic)
         refresh()
     }
 
@@ -270,7 +268,7 @@ final class AppModel {
         UIApplication.shared.isIdleTimerDisabled = true  // the GPU stops when the screen locks
         let engine = engine
         let work = Task.detached(priority: .userInitiated) {
-            try await engine.forecast(icURL: ic.url, model: model, steps: steps) { event in
+            try await engine.forecast(ic: ic, steps: steps) { event in
                 Task { @MainActor in self.handle(event) }
             }
         }
@@ -428,43 +426,37 @@ nonisolated final class Engine: @unchecked Sendable {
         }
     }
 
-    /// Download and assemble `model`'s initial condition for `date`, or the latest cycle.
-    func download(date: Date?, model: ForecastModel, progress: @escaping @Sendable (OpenDataClient.Progress) -> Void) async throws -> URL {
-        if model == .aurora {
-            let client = try AuroraOpenData(bundle: AppPaths.auroraBundle)
-            let date = if let date { date } else { try await client.latestDate() }
-            let url = AppPaths.initialConditions.appending(path: AuroraOpenData.fileName(for: date))
-            if FileManager.default.fileExists(atPath: url.path) { return url }
-            let state = try await client.build(date: date, progress: progress)
-            try Task.checkCancellation()
-            try state.save(to: url)
-            return url
+    /// Downloads into the shared open-data cache whatever `model`'s initial condition for
+    /// `date` (or the latest cycle) lacks -- often little, other models' having fetched most
+    /// of it -- and returns its date. Stopped, it discards what it fetched that nothing
+    /// complete needs.
+    func download(date: Date?, model: ForecastModel, progress: @escaping @Sendable (OpenDataClient.Progress) -> Void) async throws -> Date {
+        let date: Date = if let date { date } else {
+            switch model {
+            case .aifs: try await openDataClient().latestDate()
+            case .aurora: try await AuroraOpenData(bundle: AppPaths.auroraBundle).latestDate()
+            case .graphcast: try await GraphCastOpenData(bundle: AppPaths.graphcastBundle).latestDate()
+            }
         }
-        if model == .graphcast {
-            let client = try GraphCastOpenData(bundle: AppPaths.graphcastBundle)
-            let date = if let date { date } else { try await client.latestDate() }
-            let url = AppPaths.initialConditions.appending(path: GraphCastOpenData.fileName(for: date))
-            if FileManager.default.fileExists(atPath: url.path) { return url }
-            let state = try await client.build(date: date, progress: progress)
-            try Task.checkCancellation()
-            try state.save(to: url)
-            return url
+        guard let keys = InitialConditionStore.keys(model, date: date) else { throw AIFSError.invalidBundle("\(model.title) is not installed") }
+        #if DEVELOPER
+        let cached = keys.filter(InitialConditionStore.cache.contains).count
+        print("[AIFS] \(model.shortName) \(StoredForecast.stamp(date)): \(keys.count) messages, \(cached) already cached")
+        #endif
+        do {
+            try await InitialConditionStore.cache.fetch(keys, progress: progress)
+        } catch {
+            if Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled {
+                InitialConditionStore.discardIncomplete(model, date: date)
+            }
+            throw error
         }
-        let client = try openDataClient()
-        let latest: Date
-        if let date { latest = date } else { latest = try await client.latestDate() }
-        let date = latest
-        let url = AppPaths.initialConditions.appending(path: InitialCondition.fileName(for: date))
-        if FileManager.default.fileExists(atPath: url.path) { return url }
-        let ic = try await client.build(date: date, progress: progress)
-        try Task.checkCancellation()
-        try ic.save(to: url)
-        return url
+        return date
     }
 
-    func forecast(icURL: URL, model kind: ForecastModel, steps: Int, report: @escaping @Sendable (Event) -> Void) async throws {
-        if kind == .aurora { return try await auroraForecast(icURL: icURL, steps: steps, report: report) }
-        if kind == .graphcast { return try await graphcastForecast(icURL: icURL, steps: steps, report: report) }
+    func forecast(ic source: ICFile, steps: Int, report: @escaping @Sendable (Event) -> Void) async throws {
+        if source.model == .aurora { return try await auroraForecast(ic: source, steps: steps, report: report) }
+        if source.model == .graphcast { return try await graphcastForecast(ic: source, steps: steps, report: report) }
         report(.progress(step: 1, phase: "Loading model", fraction: 0))
         let model = try loadedModel(compiling: Self.compileProgress(report))
         // Development tuning (Developer/LaunchOptions): speed and memory only.
@@ -477,7 +469,12 @@ nonisolated final class Engine: @unchecked Sendable {
         // The initial condition's fields (~420 MB) are only needed to build the first input
         // window; scoping them here frees them before the rollout starts.
         let (startedForecast, initDate, statics): (Forecast, Date, [String: [Float]]) = try {
-            let ic = try InitialCondition.load(from: icURL)
+            // From the shared open-data cache (decoded and regridded now), or the file.
+            let ic = if let file = source.file {
+                try InitialCondition.load(from: file)
+            } else {
+                try openDataClient().build(date: source.date, from: InitialConditionStore.cache)
+            }
             // Land-sea mask (coastlines) and surface geopotential (globe relief).
             var statics: [String: [Float]] = [:]
             for name in ["lsm", "z"] { statics[name] = ic.latest(name) }
@@ -557,10 +554,14 @@ nonisolated final class Engine: @unchecked Sendable {
 
     /// Aurora 1.5 from a state file: its programs streamed onto the Neural Engine, each step's
     /// fields written as AIFS's are, on Aurora's 0.25-degree grid (720 x 1440).
-    private func auroraForecast(icURL: URL, steps: Int, report: @escaping @Sendable (Event) -> Void) async throws {
+    private func auroraForecast(ic: ICFile, steps: Int, report: @escaping @Sendable (Event) -> Void) async throws {
         report(.progress(step: 1, phase: "Loading model", fraction: 0))
         let bundle = AppPaths.auroraBundle
-        let state = try AuroraState.load(icURL)
+        let state = if let file = ic.file {
+            try AuroraState.load(file)
+        } else {
+            try AuroraOpenData(bundle: bundle).build(date: ic.date, from: InitialConditionStore.cache)
+        }
         // Everything on the Neural Engine, its programs streamed (~1.6 GB at the peak).
         let forecaster = try AuroraForecaster(directory: bundle, state: state, options: .init(resident: false))
         let stored = Array(Set(DisplayField.storedOutputs + ["sf"])).sorted()
@@ -619,10 +620,14 @@ nonisolated final class Engine: @unchecked Sendable {
     /// GraphCast (operational) from a state file: its programs on the Neural Engine, the CPU
     /// moving data along the graphs between them; each step's fields written as Aurora's are,
     /// on the 0.25-degree grid with both poles (721 x 1440).
-    private func graphcastForecast(icURL: URL, steps: Int, report: @escaping @Sendable (Event) -> Void) async throws {
+    private func graphcastForecast(ic: ICFile, steps: Int, report: @escaping @Sendable (Event) -> Void) async throws {
         report(.progress(step: 1, phase: "Loading model", fraction: 0))
         let bundle = AppPaths.graphcastBundle
-        let state = try GraphCastState.load(icURL)
+        let state = if let file = ic.file {
+            try GraphCastState.load(file)
+        } else {
+            try GraphCastOpenData(bundle: bundle).build(date: ic.date, from: InitialConditionStore.cache)
+        }
         let forecaster = try GraphCastForecaster(directory: bundle, state: state)
         // Only what it predicts: the viewer offers every field the forecast lists.
         let stored = Array(Set(DisplayField.storedOutputs + ["sf"])).sorted().filter(GraphCastForecaster.predicts)

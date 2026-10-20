@@ -2,7 +2,7 @@ import SwiftUI
 
 struct ContentView: View {
     @State private var app = AppModel()
-    @State private var selectedIC: URL?
+    @State private var selectedIC: String?
     @State private var leadHours = 48
     @State private var typingLeadTime = false
     @State private var leadTimeText = ""
@@ -61,7 +61,7 @@ struct ContentView: View {
             Text(app.errorMessage ?? "")
         }
         .onAppear {
-            if selectedIC == nil { selectedIC = app.initialConditions.first?.url }
+            if selectedIC == nil { selectedIC = app.initialConditions.first?.id }
             #if DEVELOPER
             // Development options (Developer/LaunchOptions); all off in normal use.
             app.autorunIfRequested()
@@ -78,8 +78,8 @@ struct ContentView: View {
             if sizeClass == .regular, let id { app.selectedForecastID = id }
         }
         .onChange(of: app.initialConditions) {
-            if selectedIC == nil || !app.initialConditions.contains(where: { $0.url == selectedIC }) {
-                selectedIC = app.initialConditions.first?.url
+            if selectedIC == nil || !app.initialConditions.contains(where: { $0.id == selectedIC }) {
+                selectedIC = app.initialConditions.first?.id
             }
         }
     }
@@ -157,11 +157,11 @@ struct ContentView: View {
             }
             ForEach(app.initialConditions) { ic in
                 Button {
-                    selectedIC = ic.url
+                    selectedIC = ic.id
                 } label: {
                     HStack {
-                        Image(systemName: selectedIC == ic.url ? "checkmark.circle.fill" : "circle")
-                            .foregroundStyle(selectedIC == ic.url ? Color.accentColor : .secondary)
+                        Image(systemName: selectedIC == ic.id ? "checkmark.circle.fill" : "circle")
+                            .foregroundStyle(selectedIC == ic.id ? Color.accentColor : .secondary)
                         VStack(alignment: .leading) {
                             Text(ic.date.utcLabel).foregroundStyle(.primary)
                             Text(ByteCountFormatter.string(fromByteCount: Int64(ic.bytes), countStyle: .file))
@@ -171,9 +171,9 @@ struct ContentView: View {
                     }
                     .contentShape(Rectangle())
                 }
-                // The list's selection is the open forecast, and both are keyed by file
-                // URL: without this an IC row is "selected" as a forecast that doesn't
-                // exist, and the detail column shows "No forecast selected".
+                // The list's selection is the open forecast: without this an IC row is
+                // "selected" as a forecast that doesn't exist, and the detail column shows
+                // "No forecast selected".
                 .selectionDisabled()
                 .swipeActions { Button("Delete", role: .destructive) { app.delete(ic) } }
             }
@@ -240,7 +240,7 @@ struct ContentView: View {
             } else {
                 leadTimeControl
                 Button {
-                    if let ic = app.initialConditions.first(where: { $0.url == selectedIC }) {
+                    if let ic = app.initialConditions.first(where: { $0.id == selectedIC }) {
                         if let existing = app.existingForecast(for: ic) {
                             confirmReplace = (ic, existing)
                         } else {
