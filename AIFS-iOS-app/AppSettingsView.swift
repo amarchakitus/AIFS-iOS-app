@@ -1,10 +1,14 @@
 import SwiftUI
 
-/// App-wide settings: units, licences and attribution, and the privacy policy.
+/// App-wide settings: units, storage, licences and attribution, and the privacy policy.
 struct AppSettingsView: View {
     @Bindable var units: UnitStore
+    let app: AppModel
     @Environment(\.dismiss) private var dismiss
     @State private var showAttribution = LaunchOptions.openAttribution
+    @State private var initialConditionBytes: Int?
+    @State private var confirmClear = false
+    @State private var clearing = false
 
     var body: some View {
         NavigationStack {
@@ -29,6 +33,26 @@ struct AppSettingsView: View {
                     Text("Units")
                 }
                 Section {
+                    LabeledContent("Initial conditions") {
+                        if let bytes = initialConditionBytes {
+                            Text(ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file))
+                        } else {
+                            ProgressView().controlSize(.small)
+                        }
+                    }
+                    Button("Clear initial conditions…", role: .destructive) { confirmClear = true }
+                        .disabled(clearing || app.download != nil || app.run != nil || initialConditionBytes == 0)
+                } header: {
+                    Text("Storage")
+                }
+                .confirmationDialog("Clear initial conditions", isPresented: $confirmClear, titleVisibility: .visible) {
+                    Button("Past day", role: .destructive) { clear(since: .now.addingTimeInterval(-86400)) }
+                    Button("Past week", role: .destructive) { clear(since: .now.addingTimeInterval(-7 * 86400)) }
+                    Button("All time", role: .destructive) { clear(since: nil) }
+                } message: {
+                    Text("Forecasts are kept.")
+                }
+                Section {
                     Button {
                         showAttribution = true
                     } label: {
@@ -50,6 +74,22 @@ struct AppSettingsView: View {
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
             }
+            .task { await measure() }
+        }
+    }
+
+    private func measure() async {
+        initialConditionBytes = await Task.detached { InitialConditionStore.bytesOnDisk() }.value
+    }
+
+    /// Deletes the initial conditions downloaded since `since` (all of them for nil).
+    private func clear(since: Date?) {
+        clearing = true
+        Task {
+            await Task.detached { InitialConditionStore.clear(since: since) }.value
+            app.refresh()
+            await measure()
+            clearing = false
         }
     }
 }

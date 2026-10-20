@@ -117,6 +117,16 @@ extension AppModel {
             return
         }
         if let name = LaunchOptions.selectModel, let model = ForecastModel(rawValue: name) { selectedModel = model }
+        if let range = LaunchOptions.clearICs {
+            let since: Date? = switch range {
+            case "day": .now.addingTimeInterval(-86400)
+            case "week": .now.addingTimeInterval(-7 * 86400)
+            default: nil
+            }
+            print("[AIFS] clearing initial conditions: \(range)")
+            InitialConditionStore.clear(since: since)
+            refresh()
+        }
         if LaunchOptions.deleteNewestIC, let ic = initialConditions.first {
             print("[AIFS] deleting \(ic.model.shortName) \(StoredForecast.stamp(ic.date))")
             delete(ic)

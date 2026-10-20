@@ -30,6 +30,8 @@ nonisolated enum LaunchOptions {
     /// `--delete-newest-ic`: delete the selected model's newest initial condition (tests the
     /// shared cache's bookkeeping).
     static var deleteNewestIC: Bool { flag("--delete-newest-ic") }
+    /// `--clear-ics day|week|all`: what Settings' "Clear initial conditions" does.
+    static var clearICs: String? { value("--clear-ics") }
     /// `--download-latest`: fetch the newest cycle for the selected model, then run
     /// `--autorun-steps` steps from it, if given.
     static var downloadLatest: Bool { flag("--download-latest") }

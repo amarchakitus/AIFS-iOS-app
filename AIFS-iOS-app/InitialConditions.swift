@@ -132,6 +132,57 @@ nonisolated enum InitialConditionStore {
         for date in Set(keys.map(\.date)) { cache.retain(live, cycle: date) }
     }
 
+    /// Every model's initial conditions.
+    static func all() -> [ICFile] { ForecastModel.allCases.flatMap(list) }
+
+    /// When `ic` arrived: its file's time, or when the last of its messages was downloaded.
+    static func added(_ ic: ICFile) -> Date {
+        func modified(_ url: URL) -> Date {
+            (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+        }
+        if let file = ic.file { return modified(file) }
+        return keys(ic.model, date: ic.date)?.map { modified(cache.url($0)) }.max() ?? .distantPast
+    }
+
+    /// What initial conditions take on disk: the cache, and the models' own files.
+    static func bytesOnDisk() -> Int {
+        var total = 0
+        for dir in [AppPaths.openData, AppPaths.initialConditions] {
+            let files = FileManager.default.enumerator(at: dir, includingPropertiesForKeys: [.fileSizeKey])
+            while let url = files?.nextObject() as? URL {
+                total += (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+            }
+        }
+        return total
+    }
+
+    /// Deletes the initial conditions that arrived since `since`, or all of them (nil), as
+    /// clearing a browser's history does. A message an older initial condition still reads
+    /// stays; so do forecasts.
+    static func clear(since: Date?) {
+        guard let since else {
+            try? FileManager.default.removeItem(at: AppPaths.openData)
+            try? FileManager.default.createDirectory(at: AppPaths.openData, withIntermediateDirectories: true)
+            AppPaths.excludeFromBackup(AppPaths.openData)
+            let files = (try? FileManager.default.contentsOfDirectory(at: AppPaths.initialConditions, includingPropertiesForKeys: nil)) ?? []
+            for url in files where ICFile.model(ofFile: url) != nil { try? FileManager.default.removeItem(at: url) }
+            return
+        }
+        let gone = all().filter { added($0) >= since }
+        for ic in gone { if let file = ic.file { try? FileManager.default.removeItem(at: file) } }
+        let goneIDs = Set(gone.filter { $0.file == nil }.map(\.id))
+        // What every remaining complete initial condition reads.
+        var live = Set<OpenDataCache.Key>()
+        for ic in all() where ic.file == nil && !goneIDs.contains(ic.id) {
+            live.formUnion(keys(ic.model, date: ic.date) ?? [])
+        }
+        // The cleared ones' cycles, and any other cycle a download touched since (what a
+        // stopped one left): everything there that nothing remaining reads.
+        var cycles = Set(gone.filter { $0.file == nil }.flatMap { (keys($0.model, date: $0.date) ?? []).map(\.date) })
+        for date in cache.cycles() where cache.lastModified(cycle: date) >= since { cycles.insert(date) }
+        for date in cycles { cache.retain(live, cycle: date) }
+    }
+
     /// Cycles older than `age` that no complete initial condition reads: what a failed
     /// download left (kept that long so retrying resumes it).
     static func pruneStale(olderThan age: TimeInterval = 2 * 86400) {

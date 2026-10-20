@@ -105,6 +105,19 @@ public final class OpenDataCache: @unchecked Sendable {
         return dates.sorted(by: >)
     }
 
+    /// When anything of the cycle `date` (any model) was last written.
+    public func lastModified(cycle date: Date) -> Date {
+        var latest = Date.distantPast
+        for model in (try? FileManager.default.contentsOfDirectory(atPath: root.path)) ?? [] {
+            let dir = cycleDirectory(model: model, date: date)
+            for name in (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? [] {
+                let m = try? dir.appending(path: name).resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+                if let m, m > latest { latest = m }
+            }
+        }
+        return latest
+    }
+
     /// Deletes every message of the cycle `date` (any model, any stream) not in `keep`, and
     /// the cycle's directories once empty.
     public func retain(_ keep: Set<Key>, cycle date: Date) {

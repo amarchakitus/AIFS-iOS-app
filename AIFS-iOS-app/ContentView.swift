@@ -35,7 +35,7 @@ struct ContentView: View {
                 }
             }
             .sheet(isPresented: $showSettings) {
-                AppSettingsView(units: UnitStore.shared)
+                AppSettingsView(units: UnitStore.shared, app: app)
             }
             .sheet(isPresented: $showEarlierCycles) {
                 EarlierCyclesSheet(app: app) { date in
